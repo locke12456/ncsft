@@ -1,0 +1,4 @@
+notion-client==2.2.1
+python-dotenv==1.0.0
+watchdog==3.0.0
+pathlib2==2.3.7

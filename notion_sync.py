@@ -7,15 +7,15 @@ from datetime import datetime
 from config import Config
 
 class NotionSync:
-    """Notion 檔案同步核心類別 (支援多語言)"""
+    """Notion file sync core class (multi-language support)"""
     
     def __init__(self, notion_token, parent_page_id):
         """
-        初始化同步器
+        Initialize synchronizer
         
         Args:
             notion_token: Notion API token
-            parent_page_id: 父頁面 ID（檔案將建立為此頁面的子頁面）
+            parent_page_id: Parent page ID (files will be created as subpages of this page)
         """
         self.notion = Client(auth=notion_token)
         self.parent_page_id = parent_page_id
@@ -23,63 +23,63 @@ class NotionSync:
         
     def scan_source_files(self, root_path, extensions=None):
         """
-        掃描指定資料夾中的所有程式碼檔案
+        Scan all code files in specified directory
         
         Args:
-            root_path: 根目錄路徑
-            extensions: 要掃描的檔案副檔名清單，None 表示掃描所有支援的類型
+            root_path: Root directory path
+            extensions: List of file extensions to scan, None means scan all supported types
             
         Returns:
-            list: 程式碼檔案路徑清單
+            list: List of code file paths
         """
         source_files = []
-        root = Path(root_path).resolve()  # 解析為絕對路徑
+        root = Path(root_path).resolve()  # Resolve to absolute path
         
         if not root.exists():
-            raise ValueError(f"指定路徑不存在: {root_path}")
+            raise ValueError(f"Specified path does not exist: {root_path}")
         
-        # 如果沒有指定副檔名，使用所有支援的類型
+        # If no extensions specified, use all supported types
         if extensions is None:
             extensions = Config.get_supported_extensions()
         
-        print(f"開始掃描目錄: {root}")
-        print(f"支援的檔案類型: {', '.join(extensions)}")
+        print(f"Starting directory scan: {root}")
+        print(f"Supported file types: {', '.join(extensions)}")
         
         for ext in extensions:
             pattern = f"*{ext}"
             for file_path in root.rglob(pattern):
-                # 檢查是否在忽略清單中
+                # Check if in ignore list
                 if Config.should_ignore_path(str(file_path)):
                     continue
                     
                 source_files.append(file_path)
         
-        # 按檔案路徑排序，確保一致的處理順序
+        # Sort by file path for consistent processing order
         source_files.sort()
         
-        print(f"掃描完成，找到 {len(source_files)} 個程式碼檔案")
+        print(f"Scan complete, found {len(source_files)} code files")
         return source_files
     
     def get_file_hash(self, file_path):
         """
-        計算檔案的 MD5 hash
+        Calculate MD5 hash of file
         
         Args:
-            file_path: 檔案路徑
+            file_path: File path
             
         Returns:
-            str: MD5 hash 字串
+            str: MD5 hash string
         """
         try:
             with open(file_path, 'rb') as f:
                 file_content = f.read()
                 return hashlib.md5(file_content).hexdigest()
         except Exception as e:
-            print(f"無法計算檔案 hash {file_path}: {str(e)}")
+            print(f"Cannot calculate file hash {file_path}: {str(e)}")
             return None
     
     def get_file_size(self, file_path):
-        """取得檔案大小"""
+        """Get file size"""
         try:
             return os.path.getsize(file_path)
         except:
@@ -87,69 +87,69 @@ class NotionSync:
     
     def create_or_update_subpage(self, file_path, project_root, force_update=False):
         """
-        建立或更新檔案的子頁面
+        Create or update subpage for file
         
         Args:
-            file_path: 檔案路徑
-            project_root: 專案根目錄路徑
-            force_update: 是否強制更新
+            file_path: File path
+            project_root: Project root directory path
+            force_update: Whether to force update
             
         Returns:
-            str|None: 頁面 ID 或 None（如果失敗）
+            str|None: Page ID or None (if failed)
         """
         file_hash = self.get_file_hash(file_path)
         if not file_hash:
             return None
             
-        # 修復相對路徑計算問題
+        # Fix relative path calculation issue
         try:
             project_root_path = Path(project_root).resolve()
             file_absolute_path = Path(file_path).resolve()
             relative_path = str(file_absolute_path.relative_to(project_root_path))
         except ValueError as e:
-            # 如果 relative_to 失敗，使用檔案名作為備選
-            print(f"警告：無法計算相對路徑 {file_path}，使用檔案名: {e}")
+            # If relative_to fails, use filename as fallback
+            print(f"Warning: Cannot calculate relative path {file_path}, using filename: {e}")
             relative_path = file_path.name
         
         file_size = self.get_file_size(file_path)
         
-        # 檢查是否需要更新
+        # Check if update needed
         if not force_update and relative_path in self.sync_cache:
             cached_data = self.sync_cache[relative_path]
             if cached_data.get('hash') == file_hash:
-                print(f"⏭️  跳過 {relative_path} (無變更)")
+                print(f"⏭️  Skipping {relative_path} (no changes)")
                 return cached_data.get('page_id')
         
-        # 讀取檔案內容
+        # Read file content
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
         except UnicodeDecodeError:
-            # 嘗試其他編碼
+            # Try other encodings
             try:
                 with open(file_path, 'r', encoding='gbk') as f:
                     content = f.read()
             except:
-                print(f"❌ 無法讀取檔案 {file_path}: 編碼問題")
+                print(f"❌ Cannot read file {file_path}: encoding issue")
                 return None
         except Exception as e:
-            print(f"❌ 無法讀取檔案 {file_path}: {str(e)}")
+            print(f"❌ Cannot read file {file_path}: {str(e)}")
             return None
         
-        # 檢查內容長度限制
+        # Check content length limit
         if len(content) > Config.MAX_CONTENT_LENGTH:
-            content = content[:Config.MAX_CONTENT_LENGTH] + "\\n\\n... (檔案過長，已截斷)"
+            content = content[:Config.MAX_CONTENT_LENGTH] + "\n\n... (File too long, truncated)"
         
-        # 準備頁面標題和語言
+        # Prepare page title and language
         page_title = f"{file_path.name}"
         language = Config.get_language_for_extension(file_path.suffix)
         
         try:
-            # 檢查頁面是否已存在
+            # Check if page already exists
             page_id = self.sync_cache.get(relative_path, {}).get('page_id')
             
             if page_id:
-                # 更新現有子頁面
+                # Update existing subpage
                 try:
                     self.notion.pages.update(
                         page_id=page_id,
@@ -162,16 +162,16 @@ class NotionSync:
                         }
                     )
                     
-                    # 更新頁面內容
+                    # Update page content
                     self._update_subpage_content(page_id, content, file_path, language)
-                    print(f"🔄 更新 {relative_path}")
+                    print(f"🔄 Updated {relative_path}")
                     
                 except Exception as e:
-                    print(f"更新頁面失敗，嘗試重新建立: {str(e)}")
+                    print(f"Update page failed, trying to recreate: {str(e)}")
                     page_id = None
             
             if not page_id:
-                # 建立新的子頁面
+                # Create new subpage
                 new_page = self.notion.pages.create(
                     parent={
                         "type": "page_id",
@@ -188,9 +188,9 @@ class NotionSync:
                 
                 page_id = new_page["id"]
                 self._update_subpage_content(page_id, content, file_path, language)
-                print(f"✅ 建立 {relative_path}")
+                print(f"✅ Created {relative_path}")
             
-            # 更新快取
+            # Update cache
             self.sync_cache[relative_path] = {
                 'page_id': page_id,
                 'hash': file_hash,
@@ -202,29 +202,29 @@ class NotionSync:
             return page_id
             
         except Exception as e:
-            print(f"❌ 同步失敗 {relative_path}: {str(e)}")
+            print(f"❌ Sync failed {relative_path}: {str(e)}")
             return None
     
     def _update_subpage_content(self, page_id, content, file_path, language):
         """
-        更新子頁面內容
+        Update subpage content
 
         Args:
-            page_id: 頁面 ID
-            content: 檔案內容
-            file_path: 檔案路徑
-            language: 程式語言
+            page_id: Page ID
+            content: File content
+            file_path: File path
+            language: Programming language
         """
         try:
-            # 清除現有內容
+            # Clear existing content
             children = self.notion.blocks.children.list(block_id=page_id)
             for block in children["results"]:
                 try:
                     self.notion.blocks.delete(block_id=block["id"])
                 except:
-                    pass  # 某些 block 可能無法刪除，忽略錯誤
+                    pass  # Some blocks may not be deletable, ignore errors
             
-            # 根據檔案類型選擇適當的圖示
+            # Choose appropriate icon based on file type
             file_icons = {
                 'c#': '🔷',
                 'python': '🐍',
@@ -243,7 +243,7 @@ class NotionSync:
             
             icon = file_icons.get(language, '📄')
             
-            # 基礎內容區塊
+            # Base content blocks
             blocks = [
                 {
                     "object": "block",
@@ -261,7 +261,7 @@ class NotionSync:
                     "paragraph": {
                         "rich_text": [{
                             "type": "text", 
-                            "text": {"content": f"📁 路徑: {str(file_path)}\n🔤 語言: {language.title()}\n📏 大小: {len(content)} 字元"}
+                            "text": {"content": f"📁 Path: {str(file_path)}\n🔤 Language: {language.title()}\n📏 Size: {len(content)} characters"}
                         }]
                     }
                 },
@@ -272,12 +272,12 @@ class NotionSync:
                 }
             ]
             
-            # 強制分塊處理所有程式碼內容
+            # Force chunking for all code content
             if len(content) > 0:
-                # 使用更小的安全塊大小
-                max_chunk_size = 1500  # 進一步縮小到 1500 字元
+                # Use smaller safe chunk size
+                max_chunk_size = 1500  # Further reduced to 1500 characters
                 
-                # 將程式碼按行分塊
+                # Split code by lines into chunks
                 content_lines = content.split('\n')
                 current_chunk_lines = []
                 current_chunk_length = 0
@@ -286,12 +286,12 @@ class NotionSync:
                 for line in content_lines:
                     line_length = len(line) + 1  # +1 for newline character
                     
-                    # 檢查添加這行是否會超過限制
+                    # Check if adding this line would exceed limit
                     if current_chunk_length + line_length > max_chunk_size and current_chunk_lines:
-                        # 創建當前塊
+                        # Create current chunk
                         chunk_content = '\n'.join(current_chunk_lines)
                         
-                        # 添加塊標題（除非是第一個且只有一個塊）
+                        # Add chunk title (unless it's the first and only chunk)
                         if chunk_number > 1 or len(content) > max_chunk_size:
                             blocks.append({
                                 "object": "block",
@@ -299,12 +299,12 @@ class NotionSync:
                                 "heading_3": {
                                     "rich_text": [{
                                         "type": "text", 
-                                        "text": {"content": f"📋 程式碼 (第 {chunk_number} 部分)"}
+                                        "text": {"content": f"📋 Code (Part {chunk_number})"}
                                     }]
                                 }
                             })
                         
-                        # 添加程式碼區塊
+                        # Add code block
                         blocks.append({
                             "object": "block",
                             "type": "code",
@@ -317,7 +317,7 @@ class NotionSync:
                             }
                         })
                         
-                        # 開始新的塊
+                        # Start new chunk
                         current_chunk_lines = [line]
                         current_chunk_length = line_length
                         chunk_number += 1
@@ -325,11 +325,11 @@ class NotionSync:
                         current_chunk_lines.append(line)
                         current_chunk_length += line_length
                 
-                # 添加最後一個塊
+                # Add final chunk
                 if current_chunk_lines:
                     chunk_content = '\n'.join(current_chunk_lines)
                     
-                    # 添加塊標題（如果有多個塊）
+                    # Add chunk title (if there are multiple chunks)
                     if chunk_number > 1:
                         blocks.append({
                             "object": "block",
@@ -337,7 +337,7 @@ class NotionSync:
                             "heading_3": {
                                 "rich_text": [{
                                     "type": "text", 
-                                    "text": {"content": f"📋 程式碼 (第 {chunk_number} 部分，完)"}
+                                    "text": {"content": f"📋 Code (Part {chunk_number}, Complete)"}
                                 }]
                             }
                         })
@@ -354,39 +354,39 @@ class NotionSync:
                         }
                     })
             
-            # 分批添加 blocks 到頁面
+            # Add blocks to page in batches
             batch_size = 100
             for i in range(0, len(blocks), batch_size):
                 batch = blocks[i:i+batch_size]
                 self.notion.blocks.children.append(block_id=page_id, children=batch)
             
         except Exception as e:
-            print(f"更新頁面內容失敗: {str(e)}")
+            print(f"Failed to update page content: {str(e)}")
     
     def sync_project(self, project_path, force_update=False, file_extensions=None):
         """
-        同步整個專案
+        Sync entire project
         
         Args:
-            project_path: 專案路徑
-            force_update: 是否強制更新所有檔案
-            file_extensions: 要同步的檔案副檔名清單，None 表示所有支援的類型
+            project_path: Project path
+            force_update: Whether to force update all files
+            file_extensions: List of file extensions to sync, None means all supported types
         """
         try:
-            # 解析專案路徑為絕對路徑
+            # Resolve project path to absolute path
             project_root = Path(project_path).resolve()
             
-            # 如果指定了特定副檔名，只掃描那些類型
+            # If specific extensions specified, only scan those types
             source_files = self.scan_source_files(project_root, file_extensions)
             
             if not source_files:
-                print("未找到任何符合條件的程式碼檔案")
+                print("No matching code files found")
                 return
             
-            print(f"\\n開始同步 {len(source_files)} 個檔案...")
+            print(f"\nStarting sync of {len(source_files)} files...")
             print("=" * 60)
             
-            # 按語言分組統計
+            # Group statistics by language
             language_stats = {}
             success_count = 0
             
@@ -395,72 +395,72 @@ class NotionSync:
                 
                 if self.create_or_update_subpage(file_path, project_root, force_update):
                     success_count += 1
-                    # 統計語言類型
+                    # Statistics for language type
                     ext = file_path.suffix
                     language = Config.get_language_for_extension(ext)
                     language_stats[language] = language_stats.get(language, 0) + 1
             
             print("=" * 60)
-            print(f"✨ 同步完成: {success_count}/{len(source_files)} 個檔案成功同步")
+            print(f"✨ Sync completed: {success_count}/{len(source_files)} files synced successfully")
             
-            # 顯示語言統計
+            # Display language statistics
             if language_stats:
-                print("\\n📊 檔案類型統計:")
+                print("\n📊 File type statistics:")
                 for lang, count in sorted(language_stats.items()):
-                    print(f"   {lang.title()}: {count} 個檔案")
+                    print(f"   {lang.title()}: {count} files")
             
-            # 儲存快取
+            # Save cache
             self._save_sync_cache()
             
         except Exception as e:
-            print(f"專案同步失敗: {str(e)}")
+            print(f"Project sync failed: {str(e)}")
     
     def sync_specific_language(self, project_path, language, force_update=False):
         """
-        同步特定程式語言的檔案
+        Sync files of specific programming language
         
         Args:
-            project_path: 專案路徑
-            language: 程式語言名稱 (如 'python', 'c#')
-            force_update: 是否強制更新
+            project_path: Project path
+            language: Programming language name (e.g., 'python', 'c#')
+            force_update: Whether to force update
         """
-        # 找出對應的檔案副檔名
+        # Find corresponding file extensions
         extensions = []
         for ext, lang in Config.SUPPORTED_LANGUAGES.items():
             if lang.lower() == language.lower():
                 extensions.append(ext)
         
         if not extensions:
-            print(f"❌ 不支援的程式語言: {language}")
-            print(f"支援的語言: {', '.join(set(Config.SUPPORTED_LANGUAGES.values()))}")
+            print(f"❌ Unsupported programming language: {language}")
+            print(f"Supported languages: {', '.join(set(Config.SUPPORTED_LANGUAGES.values()))}")
             return
         
-        print(f"🎯 同步 {language.title()} 檔案 (副檔名: {', '.join(extensions)})")
+        print(f"🎯 Syncing {language.title()} files (extensions: {', '.join(extensions)})")
         self.sync_project(project_path, force_update, extensions)
     
     def _load_sync_cache(self):
-        """載入同步快取"""
+        """Load sync cache"""
         cache_file = Path(Config.CACHE_FILE)
         if cache_file.exists():
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
-                print(f"載入快取失敗: {str(e)}")
+                print(f"Failed to load cache: {str(e)}")
                 return {}
         return {}
     
     def _save_sync_cache(self):
-        """儲存同步快取"""
+        """Save sync cache"""
         try:
             with open(Config.CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.sync_cache, f, indent=2, ensure_ascii=False)
-            print(f"💾 快取已儲存到 {Config.CACHE_FILE}")
+            print(f"💾 Cache saved to {Config.CACHE_FILE}")
         except Exception as e:
-            print(f"儲存快取失敗: {str(e)}")
+            print(f"Failed to save cache: {str(e)}")
     
     def clean_deleted_files(self):
-        """清理已刪除檔案的快取記錄"""
+        """Clean cache records of deleted files"""
         if not self.sync_cache:
             return
         
@@ -471,13 +471,13 @@ class NotionSync:
         
         for file_path in to_remove:
             del self.sync_cache[file_path]
-            print(f"🗑️  移除已刪除檔案的快取: {file_path}")
+            print(f"🗑️  Removed deleted file from cache: {file_path}")
         
         if to_remove:
             self._save_sync_cache()
     
     def get_project_stats(self, project_path):
-        """取得專案統計資訊"""
+        """Get project statistics"""
         project_root = Path(project_path).resolve()
         source_files = self.scan_source_files(project_root)
         
@@ -493,7 +493,7 @@ class NotionSync:
             language = Config.get_language_for_extension(ext)
             stats['languages'][language] = stats['languages'].get(language, 0) + 1
             
-            # 檢查同步狀態
+            # Check sync status
             try:
                 relative_path = str(file_path.relative_to(project_root))
             except ValueError:
