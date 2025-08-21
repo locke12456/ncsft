@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+# Use .env.example to store a template for others
+.env
+
+# Application-specific cache files
+.notion_sync_cache.json
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
