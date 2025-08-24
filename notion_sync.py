@@ -433,13 +433,14 @@ class NotionSync:
         except Exception as e:
             print(f"Project sync failed: {str(e)}")
     
-    def pull_from_notion(self, project_path, output_dir=None):
+    def pull_from_notion(self, project_path, output_dir=None, force_overwrite=False):
         """
         Pull files from Notion pages back to local directory
         
         Args:
             project_path: Original project path
             output_dir: Output directory (default: project_path + '_from_notion')
+            force_overwrite: Whether to force overwrite existing local files
         """
         try:
             # Load environment variables and cache
@@ -476,14 +477,20 @@ class NotionSync:
                 print(f"[{i}/{total_files}] Pulling {relative_path}...")
                 
                 try:
+                    # Create output file path
+                    output_file = output_dir / relative_path
+                    
+                    # Check if file exists and force_overwrite is False
+                    if output_file.exists() and not force_overwrite:
+                        print(f"⏭️  Skipping {relative_path} (file exists, use -f to overwrite)")
+                        continue
+                    
                     # Get page content
                     content = self._extract_code_from_page(page_id)
                     if content is None:
                         print(f"❌ Failed to extract content from {relative_path}")
                         continue
                     
-                    # Create output file path
-                    output_file = output_dir / relative_path
                     output_file.parent.mkdir(parents=True, exist_ok=True)
                     
                     # Write content to file

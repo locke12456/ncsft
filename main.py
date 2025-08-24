@@ -29,10 +29,12 @@ def main():
         epilog="""
 Usage Examples:
   python main.py push /path/to/project                    # Push all files to Notion
-  python main.py push /path/to/project --force            # Force update all files
-  python main.py push /path/to/project --language python  # Only sync Python files
+  python main.py push /path/to/project -f                 # Force update all files
+  python main.py push /path/to/project -l python          # Only sync Python files
+  python main.py push /path/to/project -e .py .js         # Only sync specific extensions
   python main.py pull /path/to/project                    # Pull files from Notion
-  python main.py pull /path/to/project --output /output   # Pull to specific directory
+  python main.py pull /path/to/project -f                 # Force overwrite local files
+  python main.py pull /path/to/project -o /output         # Pull to specific directory
   python main.py stats /path/to/project                   # Show project statistics
   python main.py clean /path/to/project                   # Clean deleted files from cache
 
@@ -49,14 +51,15 @@ Notes:
     # Push command (sync to Notion)
     push_parser = subparsers.add_parser('push', help='Push files to Notion')
     push_parser.add_argument('path', help='Project directory path')
-    push_parser.add_argument('--force', action='store_true', help='Force update all files')
-    push_parser.add_argument('--language', help='Only sync specific language (e.g., python, javascript)')
-    push_parser.add_argument('--extensions', nargs='+', help='Only sync specific extensions (e.g., .py .js)')
+    push_parser.add_argument('-f', '--force', action='store_true', help='Force update all files')
+    push_parser.add_argument('-l', '--language', help='Only sync specific language (e.g., python, javascript)')
+    push_parser.add_argument('-e', '--extensions', nargs='+', help='Only sync specific extensions (e.g., .py .js)')
     
     # Pull command (sync from Notion)
     pull_parser = subparsers.add_parser('pull', help='Pull files from Notion')
     pull_parser.add_argument('path', help='Original project directory path')
-    pull_parser.add_argument('--output', help='Output directory (default: {project}_from_notion)')
+    pull_parser.add_argument('-o', '--output', help='Output directory (default: {project}_from_notion)')
+    pull_parser.add_argument('-f', '--force', action='store_true', help='Force overwrite existing local files')
     
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show project statistics')
@@ -138,7 +141,8 @@ def execute_pull_command(sync, args, project_path):
     print(f"📥 Starting pull operation for: {project_path}")
     
     output_dir = args.output if args.output else None
-    sync.pull_from_notion(str(project_path), output_dir)
+    force_overwrite = getattr(args, 'force', False)
+    sync.pull_from_notion(str(project_path), output_dir, force_overwrite)
 
 def execute_stats_command(sync, project_path):
     """Execute stats command"""
