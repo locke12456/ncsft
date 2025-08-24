@@ -7,19 +7,26 @@ from datetime import datetime
 from config import Config
 
 class NotionSync:
-    """Notion file sync core class (multi-language support)"""
+    """Notion file sync core class with pull functionality"""
     
-    def __init__(self, notion_token, parent_page_id):
+    def __init__(self, notion_token=None, parent_page_id=None):
         """
         Initialize synchronizer
         
         Args:
-            notion_token: Notion API token
-            parent_page_id: Parent page ID (files will be created as subpages of this page)
+            notion_token: Notion API token (optional, will use from config if not provided)
+            parent_page_id: Parent page ID (optional, will use from config if not provided)
         """
-        self.notion = Client(auth=notion_token)
-        self.parent_page_id = parent_page_id
-        self.sync_cache = self._load_sync_cache()
+        self.notion_token = notion_token or Config.NOTION_TOKEN
+        self.parent_page_id = parent_page_id or Config.PARENT_PAGE_ID
+        self.notion = Client(auth=self.notion_token)
+        self.sync_cache = {}
+        
+    def load_cache_for_project(self, project_path):
+        """Load sync cache for specific project"""
+        cache_file = Config.get_cache_path(project_path)
+        self.sync_cache = self._load_sync_cache(cache_file)
+        return cache_file
         
     def scan_source_files(self, root_path, extensions=None):
         """
@@ -373,6 +380,17 @@ class NotionSync:
             file_extensions: List of file extensions to sync, None means all supported types
         """
         try:
+            # Load environment variables from project path
+            Config.load_env_from_path(project_path)
+            
+            # Update token and parent page ID if they changed
+            self.notion_token = Config.NOTION_TOKEN
+            self.parent_page_id = Config.PARENT_PAGE_ID
+            self.notion = Client(auth=self.notion_token)
+            
+            # Load cache for this specific project
+            cache_file = self.load_cache_for_project(project_path)
+            
             # Resolve project path to absolute path
             project_root = Path(project_path).resolve()
             
@@ -410,10 +428,113 @@ class NotionSync:
                     print(f"   {lang.title()}: {count} files")
             
             # Save cache
-            self._save_sync_cache()
+            self._save_sync_cache(cache_file)
             
         except Exception as e:
             print(f"Project sync failed: {str(e)}")
+    
+    def pull_from_notion(self, project_path, output_dir=None):
+        """
+        Pull files from Notion pages back to local directory
+        
+        Args:
+            project_path: Original project path
+            output_dir: Output directory (default: project_path + '_from_notion')
+        """
+        try:
+            # Load environment variables and cache
+            Config.load_env_from_path(project_path)
+            self.notion_token = Config.NOTION_TOKEN
+            self.parent_page_id = Config.PARENT_PAGE_ID
+            self.notion = Client(auth=self.notion_token)
+            
+            cache_file = self.load_cache_for_project(project_path)
+            
+            if not self.sync_cache:
+                print("❌ No sync cache found. Please sync project first.")
+                return
+            
+            # Set output directory
+            if not output_dir:
+                project_name = Path(project_path).name
+                output_dir = Path(project_path).parent / f"{project_name}_from_notion"
+            else:
+                output_dir = Path(output_dir)
+            
+            output_dir.mkdir(exist_ok=True)
+            print(f"📥 Pulling files to: {output_dir}")
+            print("=" * 60)
+            
+            success_count = 0
+            total_files = len(self.sync_cache)
+            
+            for i, (relative_path, cache_data) in enumerate(self.sync_cache.items(), 1):
+                page_id = cache_data.get('page_id')
+                if not page_id:
+                    continue
+                
+                print(f"[{i}/{total_files}] Pulling {relative_path}...")
+                
+                try:
+                    # Get page content
+                    content = self._extract_code_from_page(page_id)
+                    if content is None:
+                        print(f"❌ Failed to extract content from {relative_path}")
+                        continue
+                    
+                    # Create output file path
+                    output_file = output_dir / relative_path
+                    output_file.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Write content to file
+                    with open(output_file, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    
+                    print(f"✅ Pulled {relative_path}")
+                    success_count += 1
+                    
+                except Exception as e:
+                    print(f"❌ Failed to pull {relative_path}: {str(e)}")
+            
+            print("=" * 60)
+            print(f"✨ Pull completed: {success_count}/{total_files} files pulled successfully")
+            print(f"📁 Output directory: {output_dir}")
+            
+        except Exception as e:
+            print(f"Pull operation failed: {str(e)}")
+    
+    def _extract_code_from_page(self, page_id):
+        """
+        Extract code content from Notion page
+        
+        Args:
+            page_id: Notion page ID
+            
+        Returns:
+            str|None: Extracted code content or None if failed
+        """
+        try:
+            blocks = self.notion.blocks.children.list(block_id=page_id)
+            code_parts = []
+            
+            for block in blocks["results"]:
+                if block["type"] == "code":
+                    code_block = block["code"]
+                    if code_block["rich_text"]:
+                        code_content = ""
+                        for text_obj in code_block["rich_text"]:
+                            code_content += text_obj["text"]["content"]
+                        code_parts.append(code_content)
+            
+            if code_parts:
+                return '\n'.join(code_parts)
+            else:
+                print("Warning: No code blocks found in page")
+                return ""
+                
+        except Exception as e:
+            print(f"Error extracting code from page {page_id}: {str(e)}")
+            return None
     
     def sync_specific_language(self, project_path, language, force_update=False):
         """
@@ -438,9 +559,8 @@ class NotionSync:
         print(f"🎯 Syncing {language.title()} files (extensions: {', '.join(extensions)})")
         self.sync_project(project_path, force_update, extensions)
     
-    def _load_sync_cache(self):
-        """Load sync cache"""
-        cache_file = Path(Config.CACHE_FILE)
+    def _load_sync_cache(self, cache_file):
+        """Load sync cache from specific file"""
         if cache_file.exists():
             try:
                 with open(cache_file, 'r', encoding='utf-8') as f:
@@ -450,34 +570,42 @@ class NotionSync:
                 return {}
         return {}
     
-    def _save_sync_cache(self):
-        """Save sync cache"""
+    def _save_sync_cache(self, cache_file):
+        """Save sync cache to specific file"""
         try:
-            with open(Config.CACHE_FILE, 'w', encoding='utf-8') as f:
+            with open(cache_file, 'w', encoding='utf-8') as f:
                 json.dump(self.sync_cache, f, indent=2, ensure_ascii=False)
-            print(f"💾 Cache saved to {Config.CACHE_FILE}")
+            print(f"💾 Cache saved to {cache_file}")
         except Exception as e:
             print(f"Failed to save cache: {str(e)}")
     
-    def clean_deleted_files(self):
+    def clean_deleted_files(self, project_path):
         """Clean cache records of deleted files"""
+        cache_file = self.load_cache_for_project(project_path)
+        
         if not self.sync_cache:
             return
         
+        project_root = Path(project_path).resolve()
         to_remove = []
-        for file_path in self.sync_cache.keys():
-            if not Path(file_path).exists():
-                to_remove.append(file_path)
         
-        for file_path in to_remove:
-            del self.sync_cache[file_path]
-            print(f"🗑️  Removed deleted file from cache: {file_path}")
+        for relative_path in self.sync_cache.keys():
+            full_path = project_root / relative_path
+            if not full_path.exists():
+                to_remove.append(relative_path)
+        
+        for relative_path in to_remove:
+            del self.sync_cache[relative_path]
+            print(f"🗑️  Removed deleted file from cache: {relative_path}")
         
         if to_remove:
-            self._save_sync_cache()
+            self._save_sync_cache(cache_file)
     
     def get_project_stats(self, project_path):
         """Get project statistics"""
+        Config.load_env_from_path(project_path)
+        cache_file = self.load_cache_for_project(project_path)
+        
         project_root = Path(project_path).resolve()
         source_files = self.scan_source_files(project_root)
         

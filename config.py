@@ -3,22 +3,15 @@ from dotenv import load_dotenv
 from pathlib import Path
 import re
 
-# Load environment variables
-load_dotenv()
-
 class Config:
-    """Configuration management class"""
+    """Configuration management class with dynamic .env loading"""
     
-    # Notion API configuration
-    NOTION_TOKEN = os.getenv('NOTION_TOKEN')
-    PARENT_PAGE_ID = os.getenv('PARENT_PAGE_ID')
-    
-    # Project configuration
-    PROJECT_ROOT = os.getenv('PROJECT_ROOT', '.')
-    
-    # Optional configuration - can be overridden via environment variables
-    MAX_CONTENT_LENGTH = int(os.getenv('MAX_CONTENT_LENGTH', '100000'))
-    CACHE_FILE = os.getenv('CACHE_FILE', '.notion_sync_cache.json')
+    # Default values
+    _notion_token = None
+    _parent_page_id = None
+    _project_root = None
+    _max_content_length = 100000
+    _cache_file = '.notion_sync_cache.json'
     
     # Supported programming languages and their extensions
     SUPPORTED_LANGUAGES = {
@@ -80,25 +73,98 @@ class Config:
     ]
     
     @classmethod
-    def validate(cls):
-        """Validate configuration"""
-        if not cls.NOTION_TOKEN:
+    def load_env_from_path(cls, path):
+        """Load environment variables from specific path"""
+        path_obj = Path(path).resolve()
+        
+        # Try to find .env in the given path or its parents
+        current_path = path_obj if path_obj.is_dir() else path_obj.parent
+        
+        while current_path != current_path.parent:  # Stop at root
+            env_file = current_path / '.env'
+            if env_file.exists():
+                print(f"Loading .env from: {env_file}")
+                load_dotenv(env_file)
+                
+                # Update class variables with loaded values
+                cls._notion_token = os.getenv('NOTION_TOKEN')
+                cls._parent_page_id = os.getenv('PARENT_PAGE_ID')
+                cls._project_root = os.getenv('PROJECT_ROOT', str(current_path))
+                cls._max_content_length = int(os.getenv('MAX_CONTENT_LENGTH', '100000'))
+                cls._cache_file = os.getenv('CACHE_FILE', str(current_path / '.notion_sync_cache.json'))
+                
+                return True
+            current_path = current_path.parent
+        
+        # Fallback to main directory .env
+        main_env = Path.cwd() / '.env'
+        if main_env.exists():
+            print(f"Loading .env from main directory: {main_env}")
+            load_dotenv(main_env)
+            
+            cls._notion_token = os.getenv('NOTION_TOKEN')
+            cls._parent_page_id = os.getenv('PARENT_PAGE_ID')
+            cls._project_root = os.getenv('PROJECT_ROOT', '.')
+            cls._max_content_length = int(os.getenv('MAX_CONTENT_LENGTH', '100000'))
+            cls._cache_file = os.getenv('CACHE_FILE', '.notion_sync_cache.json')
+            
+            return True
+        
+        print("Warning: No .env file found in path hierarchy")
+        return False
+    
+    @classmethod
+    @property
+    def NOTION_TOKEN(cls):
+        return cls._notion_token
+    
+    @classmethod  
+    @property
+    def PARENT_PAGE_ID(cls):
+        return cls._parent_page_id
+    
+    @classmethod
+    @property
+    def PROJECT_ROOT(cls):
+        return cls._project_root
+    
+    @classmethod
+    @property
+    def MAX_CONTENT_LENGTH(cls):
+        return cls._max_content_length
+    
+    @classmethod
+    @property
+    def CACHE_FILE(cls):
+        return cls._cache_file
+    
+    @classmethod
+    def validate(cls, project_path=None):
+        """Validate configuration, optionally loading from specific path"""
+        if project_path:
+            cls.load_env_from_path(project_path)
+        else:
+            # Load from current directory if not already loaded
+            if not cls._notion_token:
+                cls.load_env_from_path(Path.cwd())
+        
+        if not cls._notion_token:
             print("❌ NOTION_TOKEN not found in environment variables")
             print("Please set NOTION_TOKEN in .env file")
             return False
         
-        if not cls.PARENT_PAGE_ID:
+        if not cls._parent_page_id:
             print("❌ PARENT_PAGE_ID not found in environment variables")
             print("Please set PARENT_PAGE_ID in .env file")
             return False
         
         # Normalize page ID format
-        cls.PARENT_PAGE_ID = cls.normalize_page_id(cls.PARENT_PAGE_ID)
+        cls._parent_page_id = cls.normalize_page_id(cls._parent_page_id)
         
-        if not cls._is_valid_page_id(cls.PARENT_PAGE_ID):
+        if not cls._is_valid_page_id(cls._parent_page_id):
             print("❌ PARENT_PAGE_ID format is invalid")
             print("Expected format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (UUID format)")
-            print(f"❌ Invalid: {cls.PARENT_PAGE_ID}")
+            print(f"❌ Invalid: {cls._parent_page_id}")
             return False
         
         print("✅ Configuration validation successful")
@@ -152,25 +218,25 @@ class Config:
         # Check each part of the path
         for part in path_obj.parts:
             for pattern in cls.IGNORE_PATTERNS:
-                # Handle wildcard patterns
-                if '*' in pattern:
-                    if pattern.startswith('*.'):
-                        # File extension pattern
-                        if part.endswith(pattern[1:]):
-                            return True
-                    else:
-                        # Other wildcard patterns
-                        import fnmatch
-                        if fnmatch.fnmatch(part.lower(), pattern.lower()):
-                            return True
-                else:
-                    # Exact match
-                    if part.lower() == pattern.lower():
+                if pattern.startswith('*'):
+                    # Wildcard pattern
+                    if part.endswith(pattern[1:]):
                         return True
+                else:
+                    # Direct match
+                    if part == pattern:
+                        return True
+        
+        # Check the full path for patterns
+        for pattern in cls.IGNORE_PATTERNS:
+            if pattern in path_str:
+                return True
         
         return False
     
     @classmethod
-    def get_ignore_patterns(cls):
-        """Get complete list of ignore patterns"""
-        return cls.IGNORE_PATTERNS.copy()
+    def get_cache_path(cls, project_path=None):
+        """Get cache file path for specific project"""
+        if project_path:
+            return Path(project_path) / '.notion_sync_cache.json'
+        return Path(cls._cache_file or '.notion_sync_cache.json')

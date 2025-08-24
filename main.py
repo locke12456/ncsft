@@ -28,104 +28,154 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Usage Examples:
-  python main.py                          # Sync current directory
-  python main.py -p /path/to/code         # Sync specified directory
-  python main.py -e .py .js               # Sync only Python and JavaScript files
-  python main.py --force                  # Force update all files
+  python main.py push /path/to/project                    # Push all files to Notion
+  python main.py push /path/to/project --force            # Force update all files
+  python main.py push /path/to/project --language python  # Only sync Python files
+  python main.py pull /path/to/project                    # Pull files from Notion
+  python main.py pull /path/to/project --output /output   # Pull to specific directory
+  python main.py stats /path/to/project                   # Show project statistics
+  python main.py clean /path/to/project                   # Clean deleted files from cache
+
+Notes:
+  - The tool will automatically look for .env files in the project directory hierarchy
+  - Each project can have its own .env configuration
+  - Cache files are stored per project directory
         """
     )
     
-    parser.add_argument(
-        '--path', '-p',
-        type=str,
-        default='.',
-        help='Path to scan for code files (default: current directory)'
-    )
+    # Add subcommands
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
-    parser.add_argument(
-        '--extensions', '-e',
-        nargs='*',
-        help='Specify file extensions to scan (e.g., .py .cs .js), if not specified, scan all supported types'
-    )
+    # Push command (sync to Notion)
+    push_parser = subparsers.add_parser('push', help='Push files to Notion')
+    push_parser.add_argument('path', help='Project directory path')
+    push_parser.add_argument('--force', action='store_true', help='Force update all files')
+    push_parser.add_argument('--language', help='Only sync specific language (e.g., python, javascript)')
+    push_parser.add_argument('--extensions', nargs='+', help='Only sync specific extensions (e.g., .py .js)')
     
-    parser.add_argument(
-        '--force', '-f',
-        action='store_true',
-        help='Force update all files, ignore cache'
-    )
+    # Pull command (sync from Notion)
+    pull_parser = subparsers.add_parser('pull', help='Pull files from Notion')
+    pull_parser.add_argument('path', help='Original project directory path')
+    pull_parser.add_argument('--output', help='Output directory (default: {project}_from_notion)')
     
-    parser.add_argument(
-        '--dry-run', '-n',
-        action='store_true',
-        help='Simulate execution without actual upload (Note: not supported in current version)'
-    )
+    # Stats command
+    stats_parser = subparsers.add_parser('stats', help='Show project statistics')
+    stats_parser.add_argument('path', help='Project directory path')
     
-    parser.add_argument(
-        '--stats', '-s',
-        action='store_true',
-        help='Display sync statistics'
-    )
+    # Clean command
+    clean_parser = subparsers.add_parser('clean', help='Clean deleted files from cache')
+    clean_parser.add_argument('path', help='Project directory path')
     
-    parser.add_argument(
-        '--clean', '-c',
-        action='store_true',
-        help='Clean local cache'
-    )
-    
-    parser.add_argument(
-        '--verbose', '-v', 
-        action='store_true', 
-        help='Display detailed output'
-    )
-    
+    # Parse arguments
     args = parser.parse_args()
     
-    try:
-        # Check configuration
-        if not Config.validate():
-            print("❌ Configuration validation failed, please check .env file")
-            sys.exit(1)
-        
-        # Initialize synchronizer
-        sync = NotionSync(Config.NOTION_TOKEN, Config.PARENT_PAGE_ID)
-        
-        if args.verbose:
-            print(f"📁 Project path: {args.path}")
-            print(f"🎯 Parent page ID: {Config.PARENT_PAGE_ID}")
-            if args.extensions:
-                print(f"📝 Specified extensions: {args.extensions}")
-        
-        # Execute corresponding operations
-        if args.stats:
-            sync.show_stats()
-        elif args.clean:
-            if sync.clean_cache():
-                print("✅ Cache cleaned successfully")
-            else:
-                print("❌ Cache cleanup failed")
-        elif args.dry_run:
-            print("⚠️  Dry-run mode is not currently supported, will perform actual sync")
-            # Execute sync
-            if args.extensions:
-                sync.sync_project(args.path, args.force, args.extensions)
-            else:
-                sync.sync_project(args.path, args.force)
-        else:
-            # Execute sync
-            if args.extensions:
-                sync.sync_project(args.path, args.force, args.extensions)
-            else:
-                sync.sync_project(args.path, args.force)
+    if not args.command:
+        parser.print_help()
+        return
     
-    except KeyboardInterrupt:
-        print("\n⚠️  User interrupted operation")
-        sys.exit(1)
+    # Convert path to absolute path
+    project_path = Path(args.path).resolve()
+    
+    if not project_path.exists():
+        print(f"❌ Error: Path does not exist: {args.path}")
+        return
+    
+    # Validate configuration for the specific project
+    if not Config.validate(project_path):
+        print("❌ Configuration validation failed")
+        return
+    
+    # Initialize NotionSync
+    try:
+        sync = NotionSync()
     except Exception as e:
-        print(f"❌ Execution failed: {str(e)}")
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
-        sys.exit(1)
+        print(f"❌ Failed to initialize NotionSync: {str(e)}")
+        return
+    
+    # Execute command
+    try:
+        if args.command == 'push':
+            execute_push_command(sync, args, project_path)
+        elif args.command == 'pull':
+            execute_pull_command(sync, args, project_path)
+        elif args.command == 'stats':
+            execute_stats_command(sync, project_path)
+        elif args.command == 'clean':
+            execute_clean_command(sync, project_path)
+            
+    except KeyboardInterrupt:
+        print("\n⚠️  Operation cancelled by user")
+    except Exception as e:
+        print(f"❌ Command execution failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+def execute_push_command(sync, args, project_path):
+    """Execute push command"""
+    print(f"🚀 Starting push operation for: {project_path}")
+    
+    if args.language:
+        # Sync specific language
+        sync.sync_specific_language(
+            str(project_path), 
+            args.language, 
+            force_update=args.force
+        )
+    elif args.extensions:
+        # Sync specific extensions
+        print(f"🎯 Syncing files with extensions: {', '.join(args.extensions)}")
+        sync.sync_project(
+            str(project_path), 
+            force_update=args.force, 
+            file_extensions=args.extensions
+        )
+    else:
+        # Sync all supported files
+        sync.sync_project(str(project_path), force_update=args.force)
+
+def execute_pull_command(sync, args, project_path):
+    """Execute pull command"""
+    print(f"📥 Starting pull operation for: {project_path}")
+    
+    output_dir = args.output if args.output else None
+    sync.pull_from_notion(str(project_path), output_dir)
+
+def execute_stats_command(sync, project_path):
+    """Execute stats command"""
+    print(f"📊 Gathering statistics for: {project_path}")
+    
+    try:
+        stats = sync.get_project_stats(str(project_path))
+        
+        print("\n" + "=" * 50)
+        print("📊 PROJECT STATISTICS")
+        print("=" * 50)
+        print(f"📁 Total files: {stats['total_files']}")
+        print(f"✅ Synced files: {stats['synced_files']}")
+        print(f"❓ Unsynced files: {stats['unsynced_files']}")
+        
+        if stats['languages']:
+            print("\n🔤 Languages breakdown:")
+            for lang, count in sorted(stats['languages'].items()):
+                status = "synced" if stats['synced_files'] > 0 else "unsynced"
+                print(f"   {lang.title()}: {count} files")
+        
+        if stats['synced_files'] > 0:
+            sync_percentage = (stats['synced_files'] / stats['total_files']) * 100
+            print(f"\n📈 Sync completion: {sync_percentage:.1f}%")
+            
+    except Exception as e:
+        print(f"❌ Failed to gather statistics: {str(e)}")
+
+def execute_clean_command(sync, project_path):
+    """Execute clean command"""
+    print(f"🧹 Cleaning cache for: {project_path}")
+    
+    try:
+        sync.clean_deleted_files(str(project_path))
+        print("✅ Cache cleaning completed")
+    except Exception as e:
+        print(f"❌ Cache cleaning failed: {str(e)}")
 
 if __name__ == "__main__":
     main()
