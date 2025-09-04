@@ -113,10 +113,11 @@ class NotionSync:
             project_root_path = Path(project_root).resolve()
             file_absolute_path = Path(file_path).resolve()
             relative_path = str(file_absolute_path.relative_to(project_root_path))
+            relative_path = relative_path.replace('\\', '/')  
         except ValueError as e:
-            # If relative_to fails, use filename as fallback
-            print(f"Warning: Cannot calculate relative path {file_path}, using filename: {e}")
-            relative_path = file_path.name
+            print(f"Warning: Cannot calculate relative path {file_path}, using absolute path: {e}")
+            relative_path = str(Path(file_path).resolve())
+            relative_path = relative_path.replace('\\', '/')  
         
         file_size = self.get_file_size(file_path)
         
@@ -152,50 +153,37 @@ class NotionSync:
         language = Config.get_language_for_extension(file_path.suffix)
         
         try:
-            # Check if page already exists
-            page_id = self.sync_cache.get(relative_path, {}).get('page_id')
-            
-            if page_id:
-                # Update existing subpage
+            # 修正：簡單解決方案 - 如果有舊頁面就先刪除
+            old_page_id = self.sync_cache.get(relative_path, {}).get('page_id')
+            if old_page_id:
                 try:
+                    # 刪除舊頁面
                     self.notion.pages.update(
-                        page_id=page_id,
-                        properties={
-                            "title": [{
-                                "text": {
-                                    "content": page_title
-                                }
-                            }]
-                        }
+                        page_id=old_page_id,
+                        archived=True
                     )
-                    
-                    # Update page content
-                    self._update_subpage_content(page_id, content, file_path, language)
-                    print(f"🔄 Updated {relative_path}")
-                    
+                    print(f"🗑️ Deleted old page for {relative_path}")
                 except Exception as e:
-                    print(f"Update page failed, trying to recreate: {str(e)}")
-                    page_id = None
+                    print(f"⚠️ Could not delete old page: {str(e)}")
             
-            if not page_id:
-                # Create new subpage
-                new_page = self.notion.pages.create(
-                    parent={
-                        "type": "page_id",
-                        "page_id": self.parent_page_id
-                    },
-                    properties={
-                        "title": [{
-                            "text": {
-                                "content": page_title
-                            }
-                        }]
-                    }
-                )
-                
-                page_id = new_page["id"]
-                self._update_subpage_content(page_id, content, file_path, language)
-                print(f"✅ Created {relative_path}")
+            # 創建新頁面
+            new_page = self.notion.pages.create(
+                parent={
+                    "type": "page_id",
+                    "page_id": self.parent_page_id
+                },
+                properties={
+                    "title": [{
+                        "text": {
+                            "content": page_title
+                        }
+                    }]
+                }
+            )
+            
+            page_id = new_page["id"]
+            self._update_subpage_content(page_id, content, file_path, language)
+            print(f"✅ Created {relative_path}")
             
             # Update cache
             self.sync_cache[relative_path] = {
@@ -630,9 +618,12 @@ class NotionSync:
             
             # Check sync status
             try:
-                relative_path = str(file_path.relative_to(project_root))
+                project_root_path = Path(project_path).resolve()
+                file_absolute_path = Path(file_path).resolve()
+                relative_path = str(file_absolute_path.relative_to(project_root_path))
             except ValueError:
-                relative_path = file_path.name
+                # 同樣的修正：使用完整路徑確保一致性
+                relative_path = str(Path(file_path).resolve())
                 
             if relative_path in self.sync_cache:
                 stats['synced_files'] += 1

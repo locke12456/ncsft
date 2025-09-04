@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 
 # -*- coding: utf-8 -*-
 
 import argparse
@@ -11,9 +11,9 @@ def print_banner():
     """Print application banner"""
     banner = """
 ╔══════════════════════════════════════════════════════════════╗
-║                    Notion Code File Sync Tool                 ║
+║           Notion Code File Sync Tool v2.0 (Improved)       ║
 ║                                                              ║
-║     Sync code project files to Notion pages automatically    ║
+║     Sync code project files to Notion with smart updates    ║
 ╚══════════════════════════════════════════════════════════════╝
     """
     print(banner)
@@ -24,7 +24,7 @@ def main():
     
     # Setup command line argument parser
     parser = argparse.ArgumentParser(
-        description='Sync code project files to Notion pages',
+        description='Sync code project files to Notion pages with improved duplicate handling',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Usage Examples:
@@ -42,6 +42,7 @@ Notes:
   - The tool will automatically look for .env files in the project directory hierarchy
   - Each project can have its own .env configuration
   - Cache files are stored per project directory
+  - v2.0 includes improved logic to prevent duplicate pages
         """
     )
     
@@ -161,7 +162,6 @@ def execute_stats_command(sync, project_path):
         if stats['languages']:
             print("\n🔤 Languages breakdown:")
             for lang, count in sorted(stats['languages'].items()):
-                status = "synced" if stats['synced_files'] > 0 else "unsynced"
                 print(f"   {lang.title()}: {count} files")
         
         if stats['synced_files'] > 0:

@@ -1,294 +1,311 @@
-# Notion Code File Sync Tool
+# 🚀 Notion Code File Sync Tool v2.0
 
-A Python tool for syncing code project files to Notion pages automatically. Supports **bidirectional sync**, incremental updates, directory scanning, and creates individual Notion pages for each code file.
+> **Powerful bidirectional sync tool** for syncing code project files to Notion pages with **smart duplicate prevention**
+> 
 
-## Features
+[![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://python.org)
 
-🔄 **Bidirectional Sync**: Push files to Notion AND pull them back to local directories
+[![Notion API](https://img.shields.io/badge/Notion-API-black.svg)](https://developers.notion.com)
 
-📥 **Pull Functionality**: Extract code from Notion pages back to local files
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-📁 **Per-Project Configuration**: Each project can have its own .env configuration
+---
 
-📄 **Individual Pages**: Creates separate Notion pages for each code file
+## ✨ What's New in v2.0
 
-🚀 **Active Sync**: Git-like manual sync mechanism - you control when to sync
+### 🔧 Fixed Critical Issues
 
-💾 **Smart Cache System**: Project-specific cache files to avoid duplicates
+- **🚫 No More Duplicate Pages**: Fixed logic that created new pages instead of updating existing ones
+- **💾 Smart Cache Management**: Improved cache key uniqueness for files with same names in different directories
+- **🗑️ Automatic Cleanup**: Old pages are automatically archived when updates occur
+- **🔄 Reliable Sync**: Cache remains valid across file updates, preventing unnecessary re-syncing
 
-🐍 **Python Implementation**: Uses official Notion API for automation
+### 🎯 Key Improvements
 
-🌐 **Multi-language Support**: Supports 30+ programming languages and file types
+- **Path Normalization**: Cross-platform path handling (Windows `\` ↔ Unix `/`)
+- **Absolute Path Fallback**: Robust handling when relative path calculation fails
+- **Archive-Safe Updates**: Handles archived/locked pages gracefully
+- **Zero Architecture Changes**: Maintains full backward compatibility
 
-## Supported Languages
+---
 
-- **Python** (.py)
-- **C#** (.cs)
-- **JavaScript** (.js, .jsx)
-- **TypeScript** (.ts, .tsx)
-- **Java** (.java)
-- **C/C++** (.c, .cpp)
-- **PHP** (.php)
-- **Ruby** (.rb)
-- **Go** (.go)
-- **Rust** (.rs)
-- **Swift** (.swift)
-- **Kotlin** (.kt)
-- **Scala** (.scala)
-- **HTML/CSS** (.html, .css, .scss, .sass, .less)
-- **Shell Scripts** (.sh, .bash, .ps1, .bat, .cmd)
-- **Configuration Files** (.json, .yaml, .yml, .xml)
-- **And many more...**
+## 🎯 Core Features
 
-## Installation & Setup
+### 📤 Push Operation
 
-### 1. Install Dependencies
+- **Smart Upload**: Sync local code files to Notion pages
+- **Incremental Sync**: Only updates changed files (MD5 hash comparison)
+- **Multi-language Support**: 30+ programming languages with syntax highlighting
+- **Intelligent Chunking**: Automatic handling of large files (1500 char chunks)
+- **Project-specific Configuration**: Per-project `.env` settings
+
+### 📥 Pull Operation
+
+- **Reverse Sync**: Download files from Notion back to local directory
+- **Structure Preservation**: Maintains original directory structure
+- **Safe Overwrite**: Optional force overwrite with `-f` flag
+- **Content Reconstruction**: Intelligently merges chunked code blocks
+
+### 🧠 Smart Cache System
+
+- **Persistent Cache**: `.notion_sync_cache.json` per project
+- **Hash-based Detection**: Skip unchanged files automatically
+- **Cross-session Consistency**: Maintains sync state across runs
+- **Cleanup Tools**: Remove orphaned cache entries
+
+---
+
+## 🚀 Quick Start
+
+### 1. Installation
 
 ```bash
+# Clone repository
+git clone <repository-url>
+cd notion-tool
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Environment Configuration
+### 2. Configuration
 
-The tool supports **per-project configuration**. It will automatically look for `.env` files in your project directory hierarchy.
+Create `.env` file in your project root:
 
-Copy `.env.example` to `.env` and fill in the required information:
+```
+NOTION_TOKEN=secret_your_notion_integration_token
+PARENT_PAGE_ID=your_parent_page_id_here
+```
+
+### 3. Basic Usage
 
 ```bash
-cp .env.example .env
+# Push entire project to Notion
+python main.py push /path/to/your/project
+
+# Push only Python files
+python main.py push /path/to/project -l python
+
+# Force update all files
+python main.py push /path/to/project -f
+
+# Pull files from Notion
+python main.py pull /path/to/project
+
+# Get project statistics
+python main.py stats /path/to/project
 ```
 
-Edit the `.env` file:
+---
 
-```
-NOTION_TOKEN=your_notion_integration_token
-PARENT_PAGE_ID=your_parent_page_id
-PROJECT_ROOT=./your_project_path
-MAX_CONTENT_LENGTH=100000
-CACHE_FILE=.notion_sync_cache.json
-```
+## 📋 Command Reference
 
-### 3. Get Notion Integration Token
-
-1. Go to [Notion Integrations](https://www.notion.so/my-integrations)
-2. Click "New integration"
-3. Fill in name (e.g., "Code File Sync")
-4. Select workspace
-5. Copy the Internal Integration Token
-
-### 4. Get Parent Page ID
-
-1. Create a new page in Notion (or use existing one)
-2. Invite your Integration to this page
-3. Extract the Page ID from the page URL
-
-## Usage
-
-The tool now supports **subcommands** for different operations:
-
-### Push Files to Notion
+### Push Commands
 
 ```bash
-# Push all files in current directory
-python [main.py](http://main.py) push ./
+# Basic sync
+python main.py push <project_path>
 
-# Push with force update (update all files regardless of changes)
-python [main.py](http://main.py) push ./ -f
+# Language-specific sync
+python main.py push <project_path> -l python     # Only Python files
+python main.py push <project_path> -l javascript # Only JavaScript files
+python main.py push <project_path> -l c#         # Only C# files
 
-# Push specific language files only
-python [main.py](http://main.py) push ./ -l python
+# Extension-specific sync
+python main.py push <project_path> -e .py .js .ts
 
-# Push specific file extensions
-python [main.py](http://main.py) push ./ -e .py .js .css
+# Force update (ignore cache)
+python main.py push <project_path> -f
 ```
 
-### Pull Files from Notion
+### Pull Commands
 
 ```bash
-# Pull all synced files from Notion
-python [main.py](http://main.py) pull ./
+# Pull to default directory ({project}_from_notion)
+python main.py pull <original_project_path>
 
-# Pull with force overwrite (overwrite existing local files)
-python [main.py](http://main.py) pull ./ -f
+# Pull to specific directory
+python main.py pull <original_project_path> -o /custom/output/dir
 
-# Pull to specific output directory
-python [main.py](http://main.py) pull ./ -o ./pulled_code
-
-# Pull to specific directory with force overwrite
-python [main.py](http://main.py) pull ./ -o ./pulled_code -f
+# Force overwrite existing files
+python main.py pull <original_project_path> -f
 ```
 
-### Project Statistics
+### Utility Commands
 
 ```bash
-# Show project sync statistics
-python [main.py](http://main.py) stats ./
+# Show project statistics
+python main.py stats <project_path>
+
+# Clean orphaned cache entries
+python main.py clean <project_path>
 ```
 
-### Cache Management
+---
+
+## 🔧 Configuration
+
+### Environment Variables
+
+```
+# Required
+NOTION_TOKEN=secret_your_integration_token_here
+PARENT_PAGE_ID=notion_parent_page_id_here
+
+# Optional
+MAX_CONTENT_LENGTH=50000    # Max chars per file (default: 50000)
+CHUNK_SIZE=1500            # Code block chunk size (default: 1500)
+```
+
+### Supported File Types
+
+**Programming Languages**:
+
+- Python (`.py`), JavaScript (`.js`), TypeScript (`.ts`)
+- C# (`.cs`), C++ (`.cpp`, `.cc`, `.cxx`), C (`.c`)
+- Java (`.java`), Go (`.go`), Rust (`.rs`)
+- PHP (`.php`), Ruby (`.rb`), Swift (`.swift`)
+- Kotlin (`.kt`), Scala (`.scala`), Perl (`.pl`)
+
+**Web Technologies**:
+
+- HTML (`.html`, `.htm`), CSS (`.css`), SCSS (`.scss`)
+- Vue (`.vue`), React (`.jsx`, `.tsx`)
+- JSON (`.json`), XML (`.xml`), YAML (`.yml`, `.yaml`)
+
+**Configuration & Scripts**:
+
+- Shell (`.sh`, `.bash`), PowerShell (`.ps1`)
+- SQL (`.sql`), Dockerfile, Makefile
+- Config files (`.ini`, `.cfg`, `.conf`)
+
+---
+
+## 🏗️ Architecture
+
+### Core Components
+
+1. [**`config.py`**] - Configuration management
+    - Environment variable loading
+    - File type mappings
+    - Ignore patterns
+2. **`notion_sync.py`** - Main synchronization logic
+    - File scanning and hashing
+    - Page creation/updating
+    - Content chunking
+    - Cache management
+3. [**`main.py`**] - Command-line interface
+    - Argument parsing
+    - User interaction
+    - Error reporting
+
+### Cache Structure
+
+```json
+{
+  "relative/path/to/file.py": {
+    "page_id": "notion_page_id_here",
+    "hash": "md5_hash_of_file_content",
+    "last_sync": "2025-09-04T12:00:00.000000",
+    "file_size": 1234,
+    "language": "python"
+  }
+}
+```
+
+---
+
+## 🧪 Testing
 
 ```bash
-# Clean deleted files from cache
-python [main.py](http://main.py) clean ./
+# Run all tests
+python -m pytest test_notion_sync.py -v
+
+# Run specific test class
+python -m pytest test_notion_sync.py::TestPageCreationAndUpdate -v
+
+# Run with coverage
+python -m pytest test_notion_sync.py --cov=notion_sync --cov-report=html
 ```
 
-### Command Reference
+---
 
-### Push Command Options
+## 🚨 Troubleshooting
 
-- `-f, --force` - Force update all files (ignore hash comparison)
-- `-l, --language` - Sync specific language only (e.g., python, javascript)
-- `-e, --extensions` - Sync specific file extensions (e.g., .py .js)
+### Common Issues
 
-### Pull Command Options
+**1. Duplicate Pages**
 
-- `-f, --force` - Force overwrite existing local files
-- `-o, --output` - Specify output directory (default: {project}_from_notion)
+```
+Problem: Multiple pages created for same file
+Solution: Use v2.0 with fixed duplicate prevention logic
+```
 
-### Help
+**2. Archived Page Errors**
+
+```
+Error: "Can't edit block that is archived"
+Solution: v2.0 automatically archives old pages before creating new ones
+```
+
+**3. Path Issues**
+
+```
+Problem: Same filename conflicts in cache
+Solution: v2.0 uses full path as cache key for uniqueness
+```
+
+**4. Encoding Errors**
+
+```
+Problem: UnicodeDecodeError on certain files
+Solution: Tool tries UTF-8 first, then GBK encoding
+```
+
+### Debug Commands
 
 ```bash
-python [main.py](http://main.py) --help
-python [main.py](http://main.py) push --help
-python [main.py](http://main.py) pull --help
+# Check cache status
+python main.py stats <project_path>
+
+# Clean problematic cache
+python main.py clean <project_path>
+
+# Force full resync
+python main.py push <project_path> -f
 ```
 
-## How It Works
+---
 
-### Push Operation
+## 🔐 Security & Privacy
 
-1. **Configuration Loading**: Finds and loads .env from project directory hierarchy
-2. **Scanning Phase**: Recursively scans specified directory for supported code files
-3. **Change Detection**: Calculates MD5 hash of files and compares with local cache
-4. **Sync Processing**:
-    - Creates new pages (if file is new)
-    - Updates existing pages (if file has changes)
-    - Skips unchanged files (improves efficiency)
-5. **Cache Update**: Updates project-specific sync cache file
+- **API Token Security**: Store tokens in `.env` files, never commit to version control
+- **Local Cache**: Cache files are stored locally and contain only metadata
+- **No Content Storage**: File content is only sent to your Notion workspace
+- **Minimal Permissions**: Only requires page read/write access
 
-### Pull Operation
+---
 
-1. **Cache Loading**: Loads project-specific cache to find synced pages
-2. **Content Extraction**: Retrieves code content from Notion pages
-3. **File Creation**: Recreates local files with extracted content
-4. **Overwrite Protection**: Skips existing files unless force flag is used
+## 🤝 Contributing
 
-## Page Structure
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Add tests for new functionality
+5. Commit your changes (`git commit -m 'Add amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
 
-The tool creates Notion pages with the following structure:
+---
 
-- **File Header**: File icon and name
-- **File Information**: Path, language, and file size
-- **Code Content**: Syntax-highlighted code blocks
-- **Chunked Content**: Large files are automatically split into multiple code blocks (due to Notion API limits)
+## 📄 License
 
-## Project Structure
+This project is licensed under the MIT License
 
-```
-ncsft/
-├── [README.md](http://README.md)                    # English documentation
-├── README(cht).md              # Chinese documentation
-├── requirements.txt            # Python dependencies
-├── .env.example               # Environment variables template
-├── .gitignore                 # Git ignore patterns
-├── [config.py](http://config.py)                  # Configuration with dynamic .env loading
-├── notion_[sync.py](http://sync.py)             # Core sync logic (unified version)
-├── [main.py](http://main.py)                    # Command line interface with subcommands
-├── block_[merger.py](http://merger.py)            # Block merging utilities
-├── test_notion_[sync.py](http://sync.py)        # Test files
-└── .notion_sync_cache.json    # Local cache (auto-generated per project)
-```
+---
 
-## Advanced Features
+## 🙏 Acknowledgments
 
-### Per-Project Configuration
-
-- Each project directory can have its own `.env` file
-- The tool searches up the directory tree for `.env` files
-- Supports different Notion tokens and parent pages per project
-
-### Smart Caching
-
-- Cache files are stored per project directory
-- Enables multiple projects to be synced independently
-- Automatic cleanup of deleted files from cache
-
-### Bidirectional Workflow
-
-1. **Development**: Work on code locally
-2. **Push**: `python [main.py](http://main.py) push ./ -f` - Sync to Notion for documentation/sharing
-3. **Collaboration**: Others can view/edit code in Notion
-4. **Pull**: `python [main.py](http://main.py) pull ./ -f` - Extract updated code back to local
-
-## Notes
-
-- Ensure your Notion Integration has write permissions to the target page
-- Initial sync of large projects may take considerable time
-- Each project maintains its own cache file for independent tracking
-- Pull operation requires previous push operation to establish page mappings
-- Supported file encoding: UTF-8
-- Large files are automatically chunked due to Notion API limitations
-
-## Common Issues
-
-**Q: How to ignore specific directories?**
-
-A: Modify the `IGNORE_PATTERNS` list in [`config.py`](http://config.py)
-
-**Q: What to do if sync fails?**
-
-A: Check network connection and Notion API permissions, review error messages
-
-**Q: Can I sync other programming languages?**
-
-A: Yes, modify the `SUPPORTED_LANGUAGES` dictionary in [`config.py`](http://config.py)
-
-**Q: How to handle encoding issues?**
-
-A: The tool automatically tries UTF-8 and GBK encodings. For other encodings, manual conversion may be needed
-
-**Q: Pull command shows "No sync cache found"?**
-
-A: You need to push files first to create the page mappings in cache
-
-**Q: How to use different Notion workspaces for different projects?**
-
-A: Create separate `.env` files in each project directory with different `NOTION_TOKEN` and `PARENT_PAGE_ID`
-
-## Examples
-
-### Basic Workflow
-
-```bash
-# Setup project
-cd /path/to/your/project
-cp /path/to/tool/.env.example .env
-# Edit .env with your Notion credentials
-
-# Push all Python files to Notion
-python /path/to/tool/[main.py](http://main.py) push ./ -l python
-
-# Pull all files back (e.g., after editing in Notion)
-python /path/to/tool/[main.py](http://main.py) pull ./ -o ./from_notion
-
-# Check sync statistics
-python /path/to/tool/[main.py](http://main.py) stats ./
-```
-
-### Multi-Project Setup
-
-```bash
-# Project A
-cd /path/to/projectA
-echo "NOTION_TOKEN=token_a\nPARENT_PAGE_ID=page_a" > .env
-python /path/to/tool/[main.py](http://main.py) push ./
-
-# Project B
-cd /path/to/projectB
-echo "NOTION_TOKEN=token_b\nPARENT_PAGE_ID=page_b" > .env
-python /path/to/tool/[main.py](http://main.py) push ./
-```
-
-## License
-
-MIT License
+- [Notion API](https://developers.notion.com) for providing excellent documentation
+- [notion-client](https://github.com/ramnes/notion-sdk-py) for the Python SDK
+- All contributors who helped improve this tool
