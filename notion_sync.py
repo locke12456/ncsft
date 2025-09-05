@@ -113,7 +113,7 @@ class NotionSync:
             project_root_path = Path(project_root).resolve()
             file_absolute_path = Path(file_path).resolve()
             relative_path = str(file_absolute_path.relative_to(project_root_path))
-            relative_path = relative_path.replace('\\', '/')  
+            #relative_path = relative_path.replace('\\', '/')  
         except ValueError as e:
             print(f"Warning: Cannot calculate relative path {file_path}, using absolute path: {e}")
             relative_path = str(Path(file_path).resolve())
@@ -153,7 +153,6 @@ class NotionSync:
         language = Config.get_language_for_extension(file_path.suffix)
         
         try:
-            # 修正：簡單解決方案 - 如果有舊頁面就先刪除
             old_page_id = self.sync_cache.get(relative_path, {}).get('page_id')
             if old_page_id:
                 try:
