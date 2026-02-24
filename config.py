@@ -212,25 +212,19 @@ class Config:
     @classmethod
     def should_ignore_path(cls, path):
         """Check if path should be ignored based on ignore patterns"""
-        path_str = str(path).lower()
         path_obj = Path(path)
         
-        # Check each part of the path
+        # Check each part of the path against patterns (exact segment match)
         for part in path_obj.parts:
             for pattern in cls.IGNORE_PATTERNS:
                 if pattern.startswith('*'):
-                    # Wildcard pattern
+                    # Wildcard pattern: match file suffix
                     if part.endswith(pattern[1:]):
                         return True
                 else:
-                    # Direct match
+                    # Exact segment match only
                     if part == pattern:
                         return True
-        
-        # Check the full path for patterns
-        for pattern in cls.IGNORE_PATTERNS:
-            if pattern in path_str:
-                return True
         
         return False
     
