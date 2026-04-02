@@ -92,7 +92,7 @@ class NotionSync:
         except:
             return 0
     
-    def create_or_update_subpage(self, file_path, project_root, force_update=False):
+    def create_or_update_subpage(self, file_path, project_root, force_update=False, use_plain_text=False, update_mode='recreate'):
         """
         Create or update subpage for file
         
@@ -100,6 +100,8 @@ class NotionSync:
             file_path: File path
             project_root: Project root directory path
             force_update: Whether to force update
+            update_mode: 'recreate' = delete old page and create new;
+                         'clear' = keep old page, clear content and rewrite
             
         Returns:
             str|None: Page ID or None (if failed)
@@ -144,9 +146,8 @@ class NotionSync:
             print(f"❌ Cannot read file {file_path}: {str(e)}")
             return None
         
-        # Check content length limit
-        if len(content) > Config.MAX_CONTENT_LENGTH:
-            content = content[:Config.MAX_CONTENT_LENGTH] + "\n\n... (File too long, truncated)"
+        # Content will be split into multiple code block parts
+        # each up to MAX_CONTENT_LENGTH characters (no truncation)
         
         # Prepare page title and language
         page_title = f"{file_path.name}"
@@ -154,34 +155,46 @@ class NotionSync:
         
         try:
             old_page_id = self.sync_cache.get(relative_path, {}).get('page_id')
-            if old_page_id:
+            
+            if old_page_id and update_mode == 'clear':
+                # Clear mode: keep old page, clear content and rewrite
                 try:
-                    # 刪除舊頁面
-                    self.notion.pages.update(
-                        page_id=old_page_id,
-                        archived=True
-                    )
-                    print(f"🗑️ Deleted old page for {relative_path}")
+                    page_id = old_page_id
+                    self._update_subpage_content(page_id, content, file_path, language, use_plain_text)
+                    print(f"🔄 Cleared and updated {relative_path}")
                 except Exception as e:
-                    print(f"⚠️ Could not delete old page: {str(e)}")
+                    print(f"⚠️ Clear mode failed, falling back to recreate: {str(e)}")
+                    # Fallback to recreate
+                    old_page_id = None
             
-            # 創建新頁面
-            new_page = self.notion.pages.create(
-                parent={
-                    "type": "page_id",
-                    "page_id": self.parent_page_id
-                },
-                properties={
-                    "title": [{
-                        "text": {
-                            "content": page_title
-                        }
-                    }]
-                }
-            )
-            
-            page_id = new_page["id"]
-            self._update_subpage_content(page_id, content, file_path, language)
+            if not old_page_id or update_mode == 'recreate':
+                # Recreate mode: delete old page and create new
+                if old_page_id:
+                    try:
+                        self.notion.pages.update(
+                            page_id=old_page_id,
+                            archived=True
+                        )
+                        print(f"🗑️ Deleted old page for {relative_path}")
+                    except Exception as e:
+                        print(f"⚠️ Could not delete old page: {str(e)}")
+                
+                new_page = self.notion.pages.create(
+                    parent={
+                        "type": "page_id",
+                        "page_id": self.parent_page_id
+                    },
+                    properties={
+                        "title": [{
+                            "text": {
+                                "content": page_title
+                            }
+                        }]
+                    }
+                )
+                
+                page_id = new_page["id"]
+                self._update_subpage_content(page_id, content, file_path, language, use_plain_text)
             print(f"✅ Created {relative_path}")
             
             # Update cache
@@ -199,7 +212,7 @@ class NotionSync:
             print(f"❌ Sync failed {relative_path}: {str(e)}")
             return None
     
-    def _update_subpage_content(self, page_id, content, file_path, language):
+    def _update_subpage_content(self, page_id, content, file_path, language, use_plain_text=False):
         """
         Update subpage content
 
@@ -266,12 +279,11 @@ class NotionSync:
                 }
             ]
             
-            # Force chunking for all code content
+            # Split content into code block parts, each up to MAX_CONTENT_LENGTH
             if len(content) > 0:
-                # Use smaller safe chunk size
-                max_chunk_size = 1500  # Further reduced to 1500 characters
+                max_block_size = Config.MAX_CONTENT_LENGTH
                 
-                # Split code by lines into chunks
+                # Split content by lines into parts of max_block_size each
                 content_lines = content.split('\n')
                 current_chunk_lines = []
                 current_chunk_length = 0
@@ -281,12 +293,13 @@ class NotionSync:
                     line_length = len(line) + 1  # +1 for newline character
                     
                     # Check if adding this line would exceed limit
-                    if current_chunk_length + line_length > max_chunk_size and current_chunk_lines:
-                        # Create current chunk
+                    if current_chunk_length + line_length > max_block_size and current_chunk_lines:
+                        # Create current chunk as a single code block
                         chunk_content = '\n'.join(current_chunk_lines)
+                        code_block = self._build_single_code_block(chunk_content, language)
                         
-                        # Add chunk title (unless it's the first and only chunk)
-                        if chunk_number > 1 or len(content) > max_chunk_size:
+                        # Add chunk title if multiple parts
+                        if chunk_number > 1 or len(content) > max_block_size:
                             blocks.append({
                                 "object": "block",
                                 "type": "heading_3",
@@ -298,18 +311,7 @@ class NotionSync:
                                 }
                             })
                         
-                        # Add code block
-                        blocks.append({
-                            "object": "block",
-                            "type": "code",
-                            "code": {
-                                "rich_text": [{
-                                    "type": "text", 
-                                    "text": {"content": chunk_content}
-                                }],
-                                "language": language
-                            }
-                        })
+                        blocks.append(code_block)
                         
                         # Start new chunk
                         current_chunk_lines = [line]
@@ -322,8 +324,8 @@ class NotionSync:
                 # Add final chunk
                 if current_chunk_lines:
                     chunk_content = '\n'.join(current_chunk_lines)
+                    code_block = self._build_single_code_block(chunk_content, language)
                     
-                    # Add chunk title (if there are multiple chunks)
                     if chunk_number > 1:
                         blocks.append({
                             "object": "block",
@@ -336,17 +338,7 @@ class NotionSync:
                             }
                         })
                     
-                    blocks.append({
-                        "object": "block",
-                        "type": "code",
-                        "code": {
-                            "rich_text": [{
-                                "type": "text", 
-                                "text": {"content": chunk_content}
-                            }],
-                            "language": language
-                        }
-                    })
+                    blocks.append(code_block)
             
             # Add blocks to page in batches
             batch_size = 100
@@ -356,8 +348,42 @@ class NotionSync:
             
         except Exception as e:
             print(f"Failed to update page content: {str(e)}")
-    
-    def sync_project(self, project_path, force_update=False, file_extensions=None):
+
+    def _build_single_code_block(self, content, language, chunk_size=1500):
+        """
+        Split full source into multiple rich_text parts inside a single code block.
+        Notion API limit: each rich_text element max 2000 chars; array max ~100 elements.
+        """
+        rich_text_parts = []
+        current_chunk_lines = []
+        current_length = 0
+
+        for line in content.split('\n'):
+            line_len = len(line) + 1  # +1 for newline
+            if current_length + line_len > chunk_size and current_chunk_lines:
+                rich_text_parts.append({
+                    "type": "text",
+                    "text": {"content": '\n'.join(current_chunk_lines) + '\n'}
+                })
+                current_chunk_lines = [line]
+                current_length = line_len
+            else:
+                current_chunk_lines.append(line)
+                current_length += line_len
+
+        if current_chunk_lines:
+            rich_text_parts.append({
+                "type": "text",
+                "text": {"content": '\n'.join(current_chunk_lines)}
+            })
+
+        return {
+            "object": "block",
+            "type": "code",
+            "code": {"rich_text": rich_text_parts, "language": language}
+        }
+
+    def sync_project(self, project_path, force_update=False, file_extensions=None, use_plain_text=False, update_mode='recreate'):
         """
         Sync entire project
         
@@ -365,6 +391,8 @@ class NotionSync:
             project_path: Project path
             force_update: Whether to force update all files
             file_extensions: List of file extensions to sync, None means all supported types
+            update_mode: 'recreate' = delete old page and create new;
+                         'clear' = keep old page, clear content and rewrite
         """
         try:
             # Load environment variables from project path
@@ -398,7 +426,7 @@ class NotionSync:
             for i, file_path in enumerate(source_files, 1):
                 print(f"[{i}/{len(source_files)}] ", end="")
                 
-                if self.create_or_update_subpage(file_path, project_root, force_update):
+                if self.create_or_update_subpage(file_path, project_root, force_update, use_plain_text, update_mode):
                     success_count += 1
                     # Statistics for language type
                     ext = file_path.suffix

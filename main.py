@@ -55,6 +55,17 @@ Notes:
     push_parser.add_argument('-f', '--force', action='store_true', help='Force update all files')
     push_parser.add_argument('-l', '--language', help='Only sync specific language (e.g., python, javascript)')
     push_parser.add_argument('-e', '--extensions', nargs='+', help='Only sync specific extensions (e.g., .py .js)')
+    push_parser.add_argument(
+        '--plain-text',
+        action='store_true',
+        help='Use single code block with plain text chunks (experimental)'
+    )
+    push_parser.add_argument(
+        '-m', '--mode',
+        choices=['recreate', 'clear'],
+        default='recreate',
+        help='Update mode: recreate = delete old page and create new (default); clear = keep old page, clear content and rewrite'
+    )
     
     # Pull command (sync from Notion)
     pull_parser = subparsers.add_parser('pull', help='Pull files from Notion')
@@ -131,11 +142,13 @@ def execute_push_command(sync, args, project_path):
         sync.sync_project(
             str(project_path), 
             force_update=args.force, 
-            file_extensions=args.extensions
+            file_extensions=args.extensions,
+            use_plain_text=args.plain_text,
+            update_mode=args.mode
         )
     else:
         # Sync all supported files
-        sync.sync_project(str(project_path), force_update=args.force)
+        sync.sync_project(str(project_path), force_update=args.force, use_plain_text=args.plain_text, update_mode=args.mode)
 
 def execute_pull_command(sync, args, project_path):
     """Execute pull command"""
