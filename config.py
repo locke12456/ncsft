@@ -42,16 +42,20 @@ class Config:
         '.sh': 'shell',
         '.bash': 'bash',
         '.ps1': 'powershell',
-        '.bat': 'batch',
-        '.cmd': 'batch',
+        '.bat': 'plain text',
+        '.cmd': 'plain text',
         '.r': 'r',
         '.m': 'matlab',
         '.pl': 'perl',
         '.lua': 'lua',
         '.dart': 'dart',
-        '.vue': 'vue',
+        '.vue': 'html',
         '.jsx': 'javascript',
         '.tsx': 'typescript',
+        '.txt': 'plain text',
+        '.text': 'plain text',
+        '.md': 'markdown',
+        '.markdown': 'markdown',
     }
     
     # File and directory patterns to ignore
@@ -207,7 +211,7 @@ class Config:
     @classmethod
     def get_language_for_extension(cls, extension):
         """Get programming language for file extension"""
-        return cls.SUPPORTED_LANGUAGES.get(extension.lower(), 'text')
+        return cls.SUPPORTED_LANGUAGES.get(extension.lower(), 'plain text')
     
     @classmethod
     def should_ignore_path(cls, path):

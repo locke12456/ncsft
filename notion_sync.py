@@ -152,6 +152,8 @@ class NotionSync:
         # Prepare page title and language
         page_title = f"{file_path.name}"
         language = Config.get_language_for_extension(file_path.suffix)
+        if use_plain_text:
+            language = 'plain text'
         
         try:
             old_page_id = self.sync_cache.get(relative_path, {}).get('page_id')
