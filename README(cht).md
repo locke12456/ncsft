@@ -20,6 +20,8 @@
 
 🌐 **多語言支援**: 支援 30+ 種程式語言和檔案類型
 
+📚 **文件匯出**: 遞迴匯出 Notion 頁面樹（含子頁面）為 Markdown 檔案
+
 ## 支援的程式語言
 
 - **Python** (.py)
@@ -132,6 +134,46 @@ python [main.py](http://main.py) stats ./
 python [main.py](http://main.py) clean ./
 ```
 
+### 匯出 Notion 文件為 Markdown（docs）
+
+將手寫的 Notion 文件（標題、表格、callout、toggle、巢狀子頁面）匯出到本地成為 Markdown 檔案，是 `push` 的反向操作。有子頁面的頁面會變成資料夾，沒有子頁面的頁面則變成單一 `.md` 檔。匯出過程有快取，可中斷後續傳，重跑時只會重新抓取有變更的頁面。
+
+```bash
+# 匯出單一頁面樹
+python [main.py](http://main.py) docs <page-id-或-url> -o ./docs
+
+# 匯出多個頁面樹
+python [main.py](http://main.py) docs <page-id-1> <page-id-2> -o ./docs
+
+# 只列出某頁面的子頁面，不進行匯出
+python [main.py](http://main.py) docs --children-of <page-id> --list -o .
+
+# 匯出某頁面底下的所有子頁面
+python [main.py](http://main.py) docs --children-of <page-id> -o ./docs
+
+# 強制重新下載，忽略快取
+python [main.py](http://main.py) docs <page-id> -o ./docs -f
+
+# 限制子頁面遞迴深度（預設 10）
+python [main.py](http://main.py) docs <page-id> -o ./docs --depth 3
+```
+
+**docs 指令選項**
+
+- `-o, --output`（必填）- 輸出目錄
+- `--children-of PAGE` - 匯出 `PAGE` 底下的所有子頁面（不寫入該頁面本身內容）
+- `--list` - 列出 `--children-of` 的子頁面後直接結束，不進行匯出
+- `--env DIR` - 向上搜尋 `.env`（內含 `NOTION_TOKEN`）的起始目錄（預設：`.`）
+- `--cache PATH` - 快取檔案路徑（預設：`{output}/.notion_docs_cache.json`）
+- `-f, --force` - 忽略快取，強制重新下載
+- `--depth N` - 子頁面遞迴最大深度（預設：10）
+- `--date` - 記錄在每個檔案中的擷取日期（預設：今天）
+
+**注意事項**
+
+- 只需要 `NOTION_TOKEN`（不需要 `PARENT_PAGE_ID`），且即使未安裝 `notion-client` 也能運作（僅使用標準函式庫）
+- Notion 託管的檔案／圖片連結是簽章過的網址，約一小時後失效；若需要長期保存這些附件，請留意匯出結束時列出的過期警告清單
+
 ### 指令參考
 
 ### Push 指令選項
@@ -193,6 +235,7 @@ ncsft/
 ├── .gitignore                 # Git 忽略規則
 ├── [config.py](http://config.py)                  # 具動態 .env 載入的配置管理
 ├── notion_[sync.py](http://sync.py)             # 核心同步邏輯（統一版本）
+├── notion_docs.py             # docs 指令：Notion 頁面樹匯出為 Markdown
 ├── [main.py](http://main.py)                    # 具子指令的命令列介面
 ├── block_[merger.py](http://merger.py)            # 區塊合併工具
 ├── test_notion_[sync.py](http://sync.py)        # 測試檔案

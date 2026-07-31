@@ -12,6 +12,7 @@ Sync code project files to Notion pages with smart caching, chunked uploads, and
 - **Update Modes** — `recreate` (delete old page, create new) or `clear` (keep page ID, rewrite content)
 - **30+ Languages** — Syntax highlighting for Python, C#, JS, TS, Go, Rust, etc.
 - **Per-project Config** — Each project can have its own `.env` file
+- **Docs Export** — Recursively export a Notion page tree (headings, tables, callouts, sub-pages) as Markdown
 
 ---
 
@@ -68,6 +69,36 @@ python main.py pull <path> -f              # Force overwrite existing files
 python main.py stats <path>                # Show project statistics
 python main.py clean <path>                # Remove deleted files from cache
 ```
+
+### docs — Export a Notion page tree as Markdown
+
+Exports a hand-written Notion document (headings, tables, callouts, toggles, nested sub-pages) to disk as Markdown — the reverse direction of `push`. A page with sub-pages becomes a folder; a leaf page becomes a single `.md` file. Runs are cached and resumable, and re-running only re-fetches pages that changed.
+
+```bash
+python main.py docs <page-id-or-url> -o ./docs             # Export one page tree
+python main.py docs <page-id-1> <page-id-2> -o ./docs      # Export multiple page trees
+python main.py docs --children-of <page-id> --list -o .    # List a page's sub-pages without exporting
+python main.py docs --children-of <page-id> -o ./docs      # Export every sub-page of a page
+python main.py docs <page-id> -o ./docs -f                 # Force re-download, ignoring the cache
+python main.py docs <page-id> -o ./docs --depth 3           # Limit sub-page recursion depth (default: 10)
+```
+
+Options:
+
+| Flag | Description |
+| --- | --- |
+| `-o, --output` | Output directory (required) |
+| `--children-of PAGE` | Export every sub-page of `PAGE` (its own content is not written) |
+| `--list` | List sub-pages of `--children-of` and exit without exporting |
+| `--env DIR` | Directory to search upward from for the `.env` holding `NOTION_TOKEN` (default: `.`) |
+| `--cache PATH` | Cache file path (default: `{output}/.notion_docs_cache.json`) |
+| `-f, --force` | Re-download even if unchanged |
+| `--depth N` | Maximum sub-page recursion depth (default: 10) |
+| `--date` | Retrieval date recorded in each file (default: today) |
+
+Notes:
+- Only needs `NOTION_TOKEN` (no `PARENT_PAGE_ID`), and works with just the standard library if `notion-client` isn't installed.
+- Notion-hosted file/image links are signed URLs that expire in about an hour — the export prints a warning listing which files need re-fetching if you need the assets to persist.
 
 ---
 
@@ -153,6 +184,7 @@ Part 3: 50,000 chars → 1 code block
 notion-tool/
 ├── main.py              # CLI entry point
 ├── notion_sync.py       # Core sync logic
+├── notion_docs.py       # docs command: Notion page tree -> Markdown exporter
 ├── config.py            # Configuration & language mappings
 ├── cleanup_tool.py      # Cleanup utilities
 ├── block_merger.py      # Block merging utilities
