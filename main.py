@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from config import Config
 from notion_sync import NotionSync
+from notion_docs import add_docs_arguments, run_export
 
 def print_banner():
     """Print application banner"""
@@ -37,6 +38,8 @@ Usage Examples:
   python main.py pull /path/to/project -o /output         # Pull to specific directory
   python main.py stats /path/to/project                   # Show project statistics
   python main.py clean /path/to/project                   # Clean deleted files from cache
+  python main.py docs <page-id> -o ./docs                 # Export a document tree as Markdown
+  python main.py docs --children-of <page-id> --list -o . # List a page's sub-pages
 
 Notes:
   - The tool will automatically look for .env files in the project directory hierarchy
@@ -73,6 +76,13 @@ Notes:
     pull_parser.add_argument('-o', '--output', help='Output directory (default: {project}_from_notion)')
     pull_parser.add_argument('-f', '--force', action='store_true', help='Force overwrite existing local files')
     
+    # Docs command (export a Notion document tree as Markdown)
+    docs_parser = subparsers.add_parser(
+        'docs',
+        help='Export Notion document pages (and their sub-pages) as Markdown'
+    )
+    add_docs_arguments(docs_parser)
+
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show project statistics')
     stats_parser.add_argument('path', help='Project directory path')
@@ -87,7 +97,13 @@ Notes:
     if not args.command:
         parser.print_help()
         return
-    
+
+    # The docs command works off page ids rather than a project directory,
+    # so it skips the project-path and PARENT_PAGE_ID validation below.
+    if args.command == 'docs':
+        execute_docs_command(args)
+        return
+
     # Convert path to absolute path
     project_path = Path(args.path).resolve()
     
@@ -157,6 +173,11 @@ def execute_pull_command(sync, args, project_path):
     output_dir = args.output if args.output else None
     force_overwrite = getattr(args, 'force', False)
     sync.pull_from_notion(str(project_path), output_dir, force_overwrite)
+
+def execute_docs_command(args):
+    """Execute docs command: export Notion document trees as Markdown"""
+    return run_export(args)
+
 
 def execute_stats_command(sync, project_path):
     """Execute stats command"""
