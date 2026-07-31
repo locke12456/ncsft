@@ -195,8 +195,8 @@ def _wrap(text, marker):
 def rich_text_to_md(rich_text):
     """Convert a Notion rich_text array to inline Markdown.
 
-    Page mentions become plain text: cross references inside prose are not
-    downloadable targets, and a dead link is worse than the title alone.
+    A page mention is rendered as an ordinary link to the referenced Notion
+    page. It is a cross reference, not a sub-page, so it is never downloaded.
     """
     parts = []
     for item in rich_text or []:
@@ -223,8 +223,9 @@ def rich_text_to_md(rich_text):
                 text = _wrap(text, "__")
 
         href = item.get("href")
-        if href and kind == "text":
-            text = f"[{text}]({href})"
+        if href:
+            label = text.replace("[", "\\[").replace("]", "\\]")
+            text = f"[{label}]({href})"
 
         parts.append(text)
     return "".join(parts)
@@ -254,15 +255,21 @@ class DocExporter:
     # whitespace clean-up cannot reach inside a code block.
     CODE_GUARD = "\x00"
 
-    def __init__(self, reader, cache_path=None, retrieved_on=None, verbose=True):
+    def __init__(self, reader, cache_path=None, retrieved_on=None, verbose=True, exclude=None):
         self.reader = reader
         self.cache_path = Path(cache_path) if cache_path else None
         self.cache = self._load_cache()
         self.retrieved_on = retrieved_on or datetime.now().strftime("%Y-%m-%d")
         self.verbose = verbose
-        self.stats = {"written": 0, "skipped": 0, "failed": 0, "pages": 0}
+        self.stats = {"written": 0, "skipped": 0, "failed": 0, "pages": 0, "excluded": 0}
         self.expiring_assets = []
         self.used_paths = set()
+        self.excluded_titles = []
+        self.exclude_patterns = [re.compile(p, re.I) for p in (exclude or [])]
+
+    def is_excluded(self, title):
+        """Sub-pages whose title matches an --exclude pattern are never fetched."""
+        return any(pattern.search(title or "") for pattern in self.exclude_patterns)
 
     # -- cache ------------------------------------------------------------
 
@@ -412,10 +419,12 @@ class DocExporter:
         found = []
         for block in blocks:
             if block.get("type") == "child_page":
-                found.append({
-                    "id": block["id"],
-                    "title": block["child_page"].get("title", "Untitled"),
-                })
+                title = block["child_page"].get("title", "Untitled")
+                if self.is_excluded(title):
+                    self.excluded_titles.append(title)
+                    self.stats["excluded"] += 1
+                    continue
+                found.append({"id": block["id"], "title": title})
             for nested in block.get("_children", []) or []:
                 found.extend(self._collect_child_pages([nested]))
         return found
@@ -588,8 +597,12 @@ class DocExporter:
 
         elif block_type == "child_page":
             title = payload.get("title", "Untitled")
-            link = self._child_link(title, block["id"], md_path, page_dir)
-            lines.append(f"{indent}- {link}")
+            if self.is_excluded(title):
+                # Not downloaded, so point at Notion rather than a missing file.
+                label = title.replace("[", "\\[").replace("]", "\\]")
+                lines.append(f"{indent}- [{label}]({page_url(block['id'])})")
+            else:
+                lines.append(f"{indent}- {self._child_link(title, block['id'], md_path, page_dir)}")
 
         elif block_type == "child_database":
             title = payload.get("title", "Untitled")
@@ -701,6 +714,11 @@ def add_docs_arguments(parser):
         "--env", metavar="DIR", default=".",
         help="Directory to search upwards from for the .env holding NOTION_TOKEN"
     )
+    parser.add_argument(
+        "--exclude", action="append", metavar="REGEX", default=None,
+        help="Skip sub-pages whose title matches this regex (case-insensitive; "
+             "repeatable). Pages named on the command line are never excluded."
+    )
     parser.add_argument("--cache", help="Cache file path (default: {output}/.notion_docs_cache.json)")
     parser.add_argument("-f", "--force", action="store_true", help="Re-download even if unchanged")
     parser.add_argument("--depth", type=int, default=10, help="Maximum sub-page recursion depth")
@@ -747,7 +765,14 @@ def run_export(args):
         return 1
 
     cache_path = Path(args.cache) if args.cache else output_dir / ".notion_docs_cache.json"
-    exporter = DocExporter(reader, cache_path=cache_path, retrieved_on=args.date)
+    exporter = DocExporter(
+        reader,
+        cache_path=cache_path,
+        retrieved_on=args.date,
+        exclude=getattr(args, "exclude", None),
+    )
+    if exporter.exclude_patterns:
+        print(f"🚫 Excluding sub-pages matching: {', '.join(p.pattern for p in exporter.exclude_patterns)}")
 
     print(f"📥 Exporting {len(page_ids)} document tree(s) to: {output_dir}")
     print("=" * 60)
@@ -769,8 +794,12 @@ def run_export(args):
 
     print("=" * 60)
     print(f"✨ Export completed: {stats['written']} written, "
-          f"{stats['skipped']} unchanged, {stats['failed']} failed "
+          f"{stats['skipped']} unchanged, {stats['excluded']} excluded, {stats['failed']} failed "
           f"({stats['pages']} pages visited, {reader.request_count} API calls)")
+    if exporter.excluded_titles:
+        print(f"\n🚫 Skipped {len(exporter.excluded_titles)} sub-page(s) by --exclude:")
+        for title in exporter.excluded_titles:
+            print(f"   - {title}")
     print(f"📁 Output directory: {output_dir}")
     print(f"💾 Cache: {cache_path}")
 
