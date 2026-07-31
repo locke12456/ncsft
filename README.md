@@ -81,6 +81,7 @@ python main.py docs --children-of <page-id> --list -o .    # List a page's sub-p
 python main.py docs --children-of <page-id> -o ./docs      # Export every sub-page of a page
 python main.py docs <page-id> -o ./docs -f                 # Force re-download, ignoring the cache
 python main.py docs <page-id> -o ./docs --depth 3           # Limit sub-page recursion depth (default: 10)
+python main.py docs <page-id> -o ./docs --exclude "^Archive" --exclude "draft"  # Skip matching sub-pages
 ```
 
 Options:
@@ -91,6 +92,7 @@ Options:
 | `--children-of PAGE` | Export every sub-page of `PAGE` (its own content is not written) |
 | `--list` | List sub-pages of `--children-of` and exit without exporting |
 | `--env DIR` | Directory to search upward from for the `.env` holding `NOTION_TOKEN` (default: `.`) |
+| `--exclude REGEX` | Skip sub-pages whose title matches this case-insensitive regex (repeatable). Pages named directly on the command line are never excluded |
 | `--cache PATH` | Cache file path (default: `{output}/.notion_docs_cache.json`) |
 | `-f, --force` | Re-download even if unchanged |
 | `--depth N` | Maximum sub-page recursion depth (default: 10) |
@@ -99,6 +101,7 @@ Options:
 Notes:
 - Only needs `NOTION_TOKEN` (no `PARENT_PAGE_ID`), and works with just the standard library if `notion-client` isn't installed.
 - Notion-hosted file/image links are signed URLs that expire in about an hour — the export prints a warning listing which files need re-fetching if you need the assets to persist.
+- Page mentions inside prose are rendered as links to the referenced Notion page (not downloaded); an excluded sub-page links to Notion instead of a missing local file.
 
 ---
 
