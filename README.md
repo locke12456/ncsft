@@ -82,6 +82,7 @@ python main.py docs --children-of <page-id> -o ./docs      # Export every sub-pa
 python main.py docs <page-id> -o ./docs -f                 # Force re-download, ignoring the cache
 python main.py docs <page-id> -o ./docs --depth 3           # Limit sub-page recursion depth (default: 10)
 python main.py docs <page-id> -o ./docs --exclude "^Archive" --exclude "draft"  # Skip matching sub-pages
+python main.py docs <page-id> -o ./docs --drop-code-pages   # Skip pages that are code rather than prose
 ```
 
 Options:
@@ -93,6 +94,7 @@ Options:
 | `--list` | List sub-pages of `--children-of` and exit without exporting |
 | `--env DIR` | Directory to search upward from for the `.env` holding `NOTION_TOKEN` (default: `.`) |
 | `--exclude REGEX` | Skip sub-pages whose title matches this case-insensitive regex (repeatable). Pages named directly on the command line are never excluded |
+| `--drop-code-pages [RATIO]` | Skip pages whose content is code rather than prose: drop a page when at least RATIO of its characters sit inside code blocks (default 0.6 when the flag is given without a value). Catches source-file, fixture and pasted-patch pages that a title filter misses |
 | `--cache PATH` | Cache file path (default: `{output}/.notion_docs_cache.json`) |
 | `-f, --force` | Re-download even if unchanged |
 | `--depth N` | Maximum sub-page recursion depth (default: 10) |
@@ -101,7 +103,7 @@ Options:
 Notes:
 - Only needs `NOTION_TOKEN` (no `PARENT_PAGE_ID`), and works with just the standard library if `notion-client` isn't installed.
 - Notion-hosted file/image links are signed URLs that expire in about an hour — the export prints a warning listing which files need re-fetching if you need the assets to persist.
-- Page mentions inside prose are rendered as links to the referenced Notion page (not downloaded); an excluded sub-page links to Notion instead of a missing local file.
+- Page mentions inside prose are rendered as links to the referenced Notion page (not downloaded); an excluded sub-page links to Notion instead of a missing local file. A page dropped by `--drop-code-pages` is linked the same way, and is recorded in the cache so a re-run costs one request instead of a full fetch.
 
 ---
 

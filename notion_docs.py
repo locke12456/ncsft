@@ -255,21 +255,54 @@ class DocExporter:
     # whitespace clean-up cannot reach inside a code block.
     CODE_GUARD = "\x00"
 
-    def __init__(self, reader, cache_path=None, retrieved_on=None, verbose=True, exclude=None):
+    def __init__(self, reader, cache_path=None, retrieved_on=None, verbose=True,
+                 exclude=None, code_page_ratio=None):
         self.reader = reader
         self.cache_path = Path(cache_path) if cache_path else None
         self.cache = self._load_cache()
         self.retrieved_on = retrieved_on or datetime.now().strftime("%Y-%m-%d")
         self.verbose = verbose
-        self.stats = {"written": 0, "skipped": 0, "failed": 0, "pages": 0, "excluded": 0}
+        self.stats = {"written": 0, "skipped": 0, "failed": 0, "pages": 0,
+                      "excluded": 0, "dropped": 0}
         self.expiring_assets = []
         self.used_paths = set()
         self.excluded_titles = []
         self.exclude_patterns = [re.compile(p, re.I) for p in (exclude or [])]
+        self.code_page_ratio = code_page_ratio
+        self.dropped_ids = set()
+        self.dropped_pages = []
 
     def is_excluded(self, title):
         """Sub-pages whose title matches an --exclude pattern are never fetched."""
         return any(pattern.search(title or "") for pattern in self.exclude_patterns)
+
+    def _text_volume(self, blocks):
+        """Split a block subtree's character count into (code, prose)."""
+        code = prose = 0
+        for block in blocks:
+            block_type = block.get("type")
+            payload = block.get(block_type, {}) or {}
+
+            length = sum(len(r.get("plain_text", "")) for r in payload.get("rich_text", []) or [])
+            if block_type == "code":
+                code += length
+            else:
+                prose += length
+
+            if block_type == "table_row":
+                for cell in payload.get("cells", []) or []:
+                    prose += sum(len(r.get("plain_text", "")) for r in cell)
+
+            child_code, child_prose = self._text_volume(block.get("_children", []) or [])
+            code += child_code
+            prose += child_prose
+        return code, prose
+
+    def code_ratio(self, blocks):
+        """Share of a page's characters that sit inside code blocks."""
+        code, prose = self._text_volume(blocks)
+        total = code + prose
+        return (code / total) if total else 0.0
 
     # -- cache ------------------------------------------------------------
 
@@ -324,6 +357,12 @@ class DocExporter:
         cached = self.cache["pages"].get(page_id, {})
         self.stats["pages"] += 1
 
+        if not force and cached.get("dropped") and cached.get("last_edited_time") == last_edited:
+            print(f"{indent}🧹 {title} (code page, cached)")
+            self.dropped_ids.add(page_id)
+            self.stats["dropped"] += 1
+            return
+
         # An unchanged page still has to be walked, but its blocks do not need
         # re-fetching: the child ids recorded last time are enough.
         unchanged = (
@@ -348,6 +387,24 @@ class DocExporter:
             print(f"{indent}❌ Cannot read blocks of {title}: {exc}")
             self.stats["failed"] += 1
             return
+
+        # A page that is a source file or a patch rather than a document: its
+        # content is code, so it is not written and its subtree is not walked.
+        if self.code_page_ratio is not None:
+            ratio = self.code_ratio(blocks)
+            if ratio >= self.code_page_ratio:
+                print(f"{indent}   🧹 dropped (code page, {ratio:.0%})")
+                self.dropped_ids.add(page_id)
+                self.dropped_pages.append((title, ratio))
+                self.stats["dropped"] += 1
+                self.cache["pages"][page_id] = {
+                    "title": title,
+                    "last_edited_time": last_edited,
+                    "dropped": "code_page",
+                    "code_ratio": round(ratio, 3),
+                }
+                self.save_cache()
+                return
 
         child_pages = self._collect_child_pages(blocks)
         name = sanitize_name(title, fallback=page_id[:8])
@@ -597,7 +654,7 @@ class DocExporter:
 
         elif block_type == "child_page":
             title = payload.get("title", "Untitled")
-            if self.is_excluded(title):
+            if self.is_excluded(title) or block["id"] in self.dropped_ids:
                 # Not downloaded, so point at Notion rather than a missing file.
                 label = title.replace("[", "\\[").replace("]", "\\]")
                 lines.append(f"{indent}- [{label}]({page_url(block['id'])})")
@@ -719,6 +776,12 @@ def add_docs_arguments(parser):
         help="Skip sub-pages whose title matches this regex (case-insensitive; "
              "repeatable). Pages named on the command line are never excluded."
     )
+    parser.add_argument(
+        "--drop-code-pages", nargs="?", type=float, const=0.6, default=None, metavar="RATIO",
+        help="Skip pages that are code rather than prose: drop a page when at least "
+             "RATIO of its characters sit inside code blocks (default 0.6 when the "
+             "flag is given without a value). Catches source-file and patch pages."
+    )
     parser.add_argument("--cache", help="Cache file path (default: {output}/.notion_docs_cache.json)")
     parser.add_argument("-f", "--force", action="store_true", help="Re-download even if unchanged")
     parser.add_argument("--depth", type=int, default=10, help="Maximum sub-page recursion depth")
@@ -770,9 +833,12 @@ def run_export(args):
         cache_path=cache_path,
         retrieved_on=args.date,
         exclude=getattr(args, "exclude", None),
+        code_page_ratio=getattr(args, "drop_code_pages", None),
     )
     if exporter.exclude_patterns:
         print(f"🚫 Excluding sub-pages matching: {', '.join(p.pattern for p in exporter.exclude_patterns)}")
+    if exporter.code_page_ratio is not None:
+        print(f"🧹 Dropping pages that are >= {exporter.code_page_ratio:.0%} code")
 
     print(f"📥 Exporting {len(page_ids)} document tree(s) to: {output_dir}")
     print("=" * 60)
@@ -794,12 +860,17 @@ def run_export(args):
 
     print("=" * 60)
     print(f"✨ Export completed: {stats['written']} written, "
-          f"{stats['skipped']} unchanged, {stats['excluded']} excluded, {stats['failed']} failed "
+          f"{stats['skipped']} unchanged, {stats['excluded']} excluded, "
+          f"{stats['dropped']} code pages dropped, {stats['failed']} failed "
           f"({stats['pages']} pages visited, {reader.request_count} API calls)")
     if exporter.excluded_titles:
         print(f"\n🚫 Skipped {len(exporter.excluded_titles)} sub-page(s) by --exclude:")
         for title in exporter.excluded_titles:
             print(f"   - {title}")
+    if exporter.dropped_pages:
+        print(f"\n🧹 Dropped {len(exporter.dropped_pages)} page(s) that are code, not prose:")
+        for title, ratio in sorted(exporter.dropped_pages, key=lambda row: -row[1]):
+            print(f"   - {ratio:.0%}  {title}")
     print(f"📁 Output directory: {output_dir}")
     print(f"💾 Cache: {cache_path}")
 

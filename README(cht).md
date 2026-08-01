@@ -159,6 +159,7 @@ python [main.py](http://main.py) docs <page-id> -o ./docs --depth 3
 
 # 排除標題符合規則的子頁面
 python [main.py](http://main.py) docs <page-id> -o ./docs --exclude "^Archive" --exclude "draft"
+python [main.py](http://main.py) docs <page-id> -o ./docs --drop-code-pages
 ```
 
 **docs 指令選項**
@@ -168,6 +169,7 @@ python [main.py](http://main.py) docs <page-id> -o ./docs --exclude "^Archive" -
 - `--list` - 列出 `--children-of` 的子頁面後直接結束，不進行匯出
 - `--env DIR` - 向上搜尋 `.env`（內含 `NOTION_TOKEN`）的起始目錄（預設：`.`）
 - `--exclude REGEX` - 排除標題符合此正規表示式（不分大小寫，可重複指定）的子頁面；直接寫在指令列上的頁面不會被排除
+- `--drop-code-pages [RATIO]` - 丟掉「內容是程式碼而非文字」的頁面：當一頁有 RATIO 以上的字元落在程式碼區塊裡就跳過（未指定數值時預設 0.6）。用來攔截標題看起來像文件、內容卻是整份原始碼、fixture 或 patch 的頁面
 - `--cache PATH` - 快取檔案路徑（預設：`{output}/.notion_docs_cache.json`）
 - `-f, --force` - 忽略快取，強制重新下載
 - `--depth N` - 子頁面遞迴最大深度（預設：10）
@@ -177,7 +179,7 @@ python [main.py](http://main.py) docs <page-id> -o ./docs --exclude "^Archive" -
 
 - 只需要 `NOTION_TOKEN`（不需要 `PARENT_PAGE_ID`），且即使未安裝 `notion-client` 也能運作（僅使用標準函式庫）
 - Notion 託管的檔案／圖片連結是簽章過的網址，約一小時後失效；若需要長期保存這些附件，請留意匯出結束時列出的過期警告清單
-- 內文中提到的頁面提及（page mention）會轉換成指向該 Notion 頁面的連結（不會被下載）；被 `--exclude` 排除的子頁面則會連結回 Notion，而非連到不存在的本地檔案
+- 內文中提到的頁面提及（page mention）會轉換成指向該 Notion 頁面的連結（不會被下載）；被 `--exclude` 排除的子頁面則會連結回 Notion，而非連到不存在的本地檔案。被 `--drop-code-pages` 丟掉的頁面也一樣連回 Notion，並且會記進快取，重跑時只花 1 個請求確認
 
 ### 指令參考
 
