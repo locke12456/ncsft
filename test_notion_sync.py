@@ -421,11 +421,87 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
 
         self.assertEqual(page_id, 'native_markdown_page')
         create_markdown_page.assert_called_once()
-        sent_title, sent_markdown = create_markdown_page.call_args.args
+        sent_title, sent_markdown, sent_parent = create_markdown_page.call_args.args
         self.assertEqual(sent_title, 'guide.md')
         self.assertIn('| A | B |', sent_markdown)
+        self.assertEqual(sent_parent, self.mock_parent_page_id)
         self.mock_notion_client.pages.create.assert_not_called()
         self.mock_notion_client.blocks.children.list.assert_not_called()
+
+    def test_nested_markdown_uses_directory_parent(self):
+        markdown_file = self.create_test_file(
+            'README.md',
+            '# Nested README',
+            'docs/api'
+        )
+
+        with patch.object(
+            self.sync,
+            '_ensure_directory_hierarchy',
+            return_value='api_folder_page'
+        ) as ensure_hierarchy, patch.object(
+            self.sync,
+            '_create_markdown_page',
+            return_value={'id': 'nested_markdown_page'}
+        ) as create_markdown_page:
+            page_id = self.sync.create_or_update_subpage(
+                markdown_file,
+                self.test_dir,
+                force_update=True
+            )
+
+        self.assertEqual(page_id, 'nested_markdown_page')
+        ensure_hierarchy.assert_called_once_with(Path('docs/api'))
+        create_markdown_page.assert_called_once_with(
+            'README.md',
+            '# Nested README',
+            'api_folder_page'
+        )
+
+    def test_directory_hierarchy_creates_nested_pages_once(self):
+        self.mock_notion_client.blocks.children.list.return_value = {
+            'results': [],
+            'has_more': False
+        }
+        self.mock_notion_client.pages.create.side_effect = [
+            {'id': 'docs_folder_page'},
+            {'id': 'api_folder_page'}
+        ]
+
+        first_result = self.sync._ensure_directory_hierarchy(Path('docs/api'))
+        second_result = self.sync._ensure_directory_hierarchy(Path('docs/api'))
+
+        self.assertEqual(first_result, 'api_folder_page')
+        self.assertEqual(second_result, 'api_folder_page')
+        self.assertEqual(self.mock_notion_client.pages.create.call_count, 2)
+        self.mock_notion_client.pages.create.assert_has_calls([
+            call(
+                parent={
+                    'type': 'page_id',
+                    'page_id': self.mock_parent_page_id
+                },
+                properties={
+                    'title': [{
+                        'text': {
+                            'content': 'docs'
+                        }
+                    }]
+                }
+            ),
+            call(
+                parent={
+                    'type': 'page_id',
+                    'page_id': 'docs_folder_page'
+                },
+                properties={
+                    'title': [{
+                        'text': {
+                            'content': 'api'
+                        }
+                    }]
+                }
+            )
+        ])
 
 
 if __name__ == '__main__':

@@ -23,6 +23,7 @@ class NotionSync:
         self.parent_page_id = parent_page_id or Config.PARENT_PAGE_ID
         self.notion = Client(auth=self.notion_token)
         self.sync_cache = {}
+        self.directory_page_cache = {}
         
     def load_cache_for_project(self, project_path):
         """Load sync cache for specific project"""
@@ -116,12 +117,15 @@ class NotionSync:
         try:
             project_root_path = Path(project_root).resolve()
             file_absolute_path = Path(file_path).resolve()
-            relative_path = str(file_absolute_path.relative_to(project_root_path))
+            relative_path_obj = file_absolute_path.relative_to(project_root_path)
+            relative_path = str(relative_path_obj)
+            relative_directory = relative_path_obj.parent
             #relative_path = relative_path.replace('\\', '/')  
         except ValueError as e:
             print(f"Warning: Cannot calculate relative path {file_path}, using absolute path: {e}")
             relative_path = str(Path(file_path).resolve())
-            relative_path = relative_path.replace('\\', '/')  
+            relative_path = relative_path.replace('\\', '/')
+            relative_directory = Path()
         
         file_size = self.get_file_size(file_path)
         
@@ -159,6 +163,10 @@ class NotionSync:
             language = 'plain text'
         
         try:
+            target_parent_page_id = self.parent_page_id
+            if is_markdown:
+                target_parent_page_id = self._ensure_directory_hierarchy(relative_directory)
+
             old_page_id = self.sync_cache.get(relative_path, {}).get('page_id')
             
             if old_page_id and update_mode == 'clear' and not is_markdown:
@@ -185,7 +193,11 @@ class NotionSync:
                         print(f"⚠️ Could not delete old page: {str(e)}")
                 
                 if is_markdown:
-                    new_page = self._create_markdown_page(page_title, content)
+                    new_page = self._create_markdown_page(
+                        page_title,
+                        content,
+                        target_parent_page_id
+                    )
                 else:
                     new_page = self.notion.pages.create(
                         parent={
@@ -221,12 +233,82 @@ class NotionSync:
             print(f"❌ Sync failed {relative_path}: {str(e)}")
             return None
     
-    def _create_markdown_page(self, page_title, markdown_content):
+    def _find_child_page(self, parent_page_id, page_title):
+        """Find an existing direct child page by title."""
+        cursor = None
+        while True:
+            request_args = {
+                "block_id": parent_page_id,
+                "page_size": 100
+            }
+            if cursor:
+                request_args["start_cursor"] = cursor
+
+            response = self.notion.blocks.children.list(**request_args)
+            for block in response.get("results", []):
+                if (
+                    block.get("type") == "child_page"
+                    and block.get("child_page", {}).get("title") == page_title
+                ):
+                    return block.get("id")
+
+            if not response.get("has_more"):
+                return None
+            cursor = response.get("next_cursor")
+            if not cursor:
+                return None
+
+    def _ensure_directory_hierarchy(self, relative_directory):
+        """Create or reuse nested Notion pages for a relative directory path."""
+        if not relative_directory or str(relative_directory) in ('', '.'):
+            return self.parent_page_id
+
+        current_parent_id = self.parent_page_id
+        path_parts = []
+
+        for directory_name in relative_directory.parts:
+            if directory_name in ('', '.'):
+                continue
+
+            path_parts.append(directory_name)
+            cache_key = '/'.join(path_parts)
+            cached_page_id = self.directory_page_cache.get(cache_key)
+            if cached_page_id:
+                current_parent_id = cached_page_id
+                continue
+
+            directory_page_id = self._find_child_page(
+                current_parent_id,
+                directory_name
+            )
+            if not directory_page_id:
+                directory_page = self.notion.pages.create(
+                    parent={
+                        "type": "page_id",
+                        "page_id": current_parent_id
+                    },
+                    properties={
+                        "title": [{
+                            "text": {
+                                "content": directory_name
+                            }
+                        }]
+                    }
+                )
+                directory_page_id = directory_page["id"]
+
+            self.directory_page_cache[cache_key] = directory_page_id
+            current_parent_id = directory_page_id
+
+        return current_parent_id
+
+    def _create_markdown_page(self, page_title, markdown_content, parent_page_id=None):
         """Create a Notion page by passing Markdown directly to Notion."""
+        target_parent_page_id = parent_page_id or self.parent_page_id
         payload = {
             "parent": {
                 "type": "page_id",
-                "page_id": self.parent_page_id
+                "page_id": target_parent_page_id
             },
             "properties": {
                 "title": [{
@@ -447,6 +529,7 @@ class NotionSync:
             self.notion_token = Config.NOTION_TOKEN
             self.parent_page_id = Config.PARENT_PAGE_ID
             self.notion = Client(auth=self.notion_token)
+            self.directory_page_cache = {}
             
             # Load cache for this specific project
             cache_file = self.load_cache_for_project(project_path)
