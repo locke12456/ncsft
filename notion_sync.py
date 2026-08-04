@@ -1,6 +1,8 @@
 import os
 import hashlib
 import json
+import urllib.error
+import urllib.request
 from pathlib import Path
 from notion_client import Client
 from datetime import datetime
@@ -152,14 +154,15 @@ class NotionSync:
         # Prepare page title and language
         page_title = f"{file_path.name}"
         language = Config.get_language_for_extension(file_path.suffix)
-        if use_plain_text:
+        is_markdown = file_path.suffix.lower() in ('.md', '.markdown')
+        if use_plain_text and not is_markdown:
             language = 'plain text'
         
         try:
             old_page_id = self.sync_cache.get(relative_path, {}).get('page_id')
             
-            if old_page_id and update_mode == 'clear':
-                # Clear mode: keep old page, clear content and rewrite
+            if old_page_id and update_mode == 'clear' and not is_markdown:
+                # Clear mode applies only to block-based code pages.
                 try:
                     page_id = old_page_id
                     self._update_subpage_content(page_id, content, file_path, language, use_plain_text)
@@ -169,8 +172,8 @@ class NotionSync:
                     # Fallback to recreate
                     old_page_id = None
             
-            if not old_page_id or update_mode == 'recreate':
-                # Recreate mode: delete old page and create new
+            if not old_page_id or update_mode == 'recreate' or is_markdown:
+                # Markdown is created with content in one request, so it uses recreate mode.
                 if old_page_id:
                     try:
                         self.notion.pages.update(
@@ -181,22 +184,26 @@ class NotionSync:
                     except Exception as e:
                         print(f"⚠️ Could not delete old page: {str(e)}")
                 
-                new_page = self.notion.pages.create(
-                    parent={
-                        "type": "page_id",
-                        "page_id": self.parent_page_id
-                    },
-                    properties={
-                        "title": [{
-                            "text": {
-                                "content": page_title
-                            }
-                        }]
-                    }
-                )
+                if is_markdown:
+                    new_page = self._create_markdown_page(page_title, content)
+                else:
+                    new_page = self.notion.pages.create(
+                        parent={
+                            "type": "page_id",
+                            "page_id": self.parent_page_id
+                        },
+                        properties={
+                            "title": [{
+                                "text": {
+                                    "content": page_title
+                                }
+                            }]
+                        }
+                    )
                 
                 page_id = new_page["id"]
-                self._update_subpage_content(page_id, content, file_path, language, use_plain_text)
+                if not is_markdown:
+                    self._update_subpage_content(page_id, content, file_path, language, use_plain_text)
             print(f"✅ Created {relative_path}")
             
             # Update cache
@@ -214,6 +221,42 @@ class NotionSync:
             print(f"❌ Sync failed {relative_path}: {str(e)}")
             return None
     
+    def _create_markdown_page(self, page_title, markdown_content):
+        """Create a Notion page by passing Markdown directly to Notion."""
+        payload = {
+            "parent": {
+                "type": "page_id",
+                "page_id": self.parent_page_id
+            },
+            "properties": {
+                "title": [{
+                    "text": {
+                        "content": page_title
+                    }
+                }]
+            },
+            "markdown": markdown_content
+        }
+        request = urllib.request.Request(
+            "https://api.notion.com/v1/pages",
+            data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+            headers={
+                "Authorization": f"Bearer {self.notion_token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2026-03-11"
+            },
+            method="POST"
+        )
+
+        try:
+            with urllib.request.urlopen(request) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except urllib.error.HTTPError as error:
+            response_body = error.read().decode('utf-8', errors='replace')
+            raise RuntimeError(
+                f"Notion Markdown API failed ({error.code}): {response_body}"
+            ) from error
+
     def _update_subpage_content(self, page_id, content, file_path, language, use_plain_text=False):
         """
         Update subpage content

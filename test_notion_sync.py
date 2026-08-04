@@ -366,5 +366,67 @@ class TestIntegrationScenarios(TestNotionSyncFixed):
         self.assertEqual(self.sync.sync_cache["existing.py"]['page_id'], "updated_existing_page")
         self.assertEqual(self.sync.sync_cache["brand_new.py"]['page_id'], "brand_new_page")
 
+class TestDirectMarkdownPageApi(TestNotionSyncFixed):
+    """Tests for sending Markdown source directly to Notion."""
+
+    def test_create_markdown_page_sends_source_unchanged(self):
+        markdown_content = (
+            "# Report\n\n"
+            "| Field | Value |\n"
+            "| --- | --- |\n"
+            "| Age | 100 |\n\n"
+            "**Bold** and [Link](https://example.com)"
+        )
+        response_context = MagicMock()
+        response_context.__enter__.return_value.read.return_value = b'{"id":"markdown_page_123"}'
+
+        with patch(
+            'notion_sync.urllib.request.urlopen',
+            return_value=response_context
+        ) as urlopen:
+            result = self.sync._create_markdown_page('Report.md', markdown_content)
+
+        self.assertEqual(result['id'], 'markdown_page_123')
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data.decode('utf-8'))
+        headers = {key.lower(): value for key, value in request.header_items()}
+
+        self.assertEqual(request.get_method(), 'POST')
+        self.assertEqual(request.full_url, 'https://api.notion.com/v1/pages')
+        self.assertEqual(headers['notion-version'], '2026-03-11')
+        self.assertEqual(payload['markdown'], markdown_content)
+        self.assertEqual(payload['parent']['page_id'], self.mock_parent_page_id)
+        self.assertEqual(
+            payload['properties']['title'][0]['text']['content'],
+            'Report.md'
+        )
+
+    def test_markdown_file_uses_direct_page_api(self):
+        markdown_file = self.create_test_file(
+            'guide.md',
+            '# Guide\n\n| A | B |\n| --- | --- |\n| 1 | 2 |'
+        )
+        self.mock_notion_client.pages.create.reset_mock()
+
+        with patch.object(
+            self.sync,
+            '_create_markdown_page',
+            return_value={'id': 'native_markdown_page'}
+        ) as create_markdown_page:
+            page_id = self.sync.create_or_update_subpage(
+                markdown_file,
+                self.test_dir,
+                force_update=True
+            )
+
+        self.assertEqual(page_id, 'native_markdown_page')
+        create_markdown_page.assert_called_once()
+        sent_title, sent_markdown = create_markdown_page.call_args.args
+        self.assertEqual(sent_title, 'guide.md')
+        self.assertIn('| A | B |', sent_markdown)
+        self.mock_notion_client.pages.create.assert_not_called()
+        self.mock_notion_client.blocks.children.list.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
