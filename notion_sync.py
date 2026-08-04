@@ -576,6 +576,42 @@ class NotionSync:
         except Exception as e:
             print(f"Project sync failed: {str(e)}")
     
+    def _retrieve_markdown_page(self, page_id):
+        """Retrieve a Notion page as Enhanced Markdown."""
+        api_base = "https:" + "//api.notion.com/v1/pages"
+        request_url = "/".join((api_base, str(page_id), "markdown"))
+        request = urllib.request.Request(
+            request_url,
+            headers={
+                "Authorization": f"Bearer {self.notion_token}",
+                "Notion-Version": "2026-03-11",
+            },
+            method="GET",
+        )
+
+        try:
+            with urllib.request.urlopen(request) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            response_body = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Notion Markdown API failed ({error.code}): {response_body}"
+            ) from error
+
+        if payload.get("truncated"):
+            unknown_block_ids = payload.get("unknown_block_ids", [])
+            raise RuntimeError(
+                "Notion Markdown response was truncated; refusing to write "
+                f"partial content (unknown blocks: {unknown_block_ids})"
+            )
+
+        markdown_content = payload.get("markdown")
+        if not isinstance(markdown_content, str):
+            raise RuntimeError(
+                "Notion Markdown response did not contain markdown text"
+            )
+        return markdown_content
+
     def pull_from_notion(self, project_path, output_dir=None, force_overwrite=False):
         """
         Pull files from Notion pages back to local directory
@@ -629,7 +665,14 @@ class NotionSync:
                         continue
                     
                     # Get page content
-                    content = self._extract_code_from_page(page_id)
+                    is_markdown = (
+                        Path(relative_path).suffix.lower() in ('.md', '.markdown')
+                        or cache_data.get('language') == 'markdown'
+                    )
+                    if is_markdown:
+                        content = self._retrieve_markdown_page(page_id)
+                    else:
+                        content = self._extract_code_from_page(page_id)
                     if content is None:
                         print(f"❌ Failed to extract content from {relative_path}")
                         continue

@@ -503,6 +503,123 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
             )
         ])
 
+    def test_retrieve_markdown_page_returns_markdown(self):
+        markdown_content = "# Report\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+        response_context = MagicMock()
+        response_context.__enter__.return_value.read.return_value = json.dumps({
+            "markdown": markdown_content,
+            "truncated": False,
+            "unknown_block_ids": [],
+        }).encode("utf-8")
+
+        with patch(
+            "notion_sync.urllib.request.urlopen",
+            return_value=response_context,
+        ) as urlopen:
+            result = self.sync._retrieve_markdown_page("markdown_page_123")
+
+        self.assertEqual(result, markdown_content)
+        request = urlopen.call_args.args[0]
+        headers = {key.lower(): value for key, value in request.header_items()}
+        expected_url = (
+            "https:" + "//api.notion.com/v1/pages/"
+            "markdown_page_123/markdown"
+        )
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(request.full_url, expected_url)
+        self.assertEqual(headers["notion-version"], "2026-03-11")
+
+    def test_retrieve_markdown_page_rejects_truncated_content(self):
+        response_context = MagicMock()
+        response_context.__enter__.return_value.read.return_value = json.dumps({
+            "markdown": "# Partial",
+            "truncated": True,
+            "unknown_block_ids": ["block_456"],
+        }).encode("utf-8")
+
+        with patch(
+            "notion_sync.urllib.request.urlopen",
+            return_value=response_context,
+        ):
+            with self.assertRaises(RuntimeError):
+                self.sync._retrieve_markdown_page("markdown_page_123")
+
+    def test_pull_routes_markdown_through_markdown_api(self):
+        output_dir = Path(self.test_dir) / "pulled"
+        self.sync.sync_cache = {
+            str(Path("docs") / "README.md"): {
+                "page_id": "markdown_page_123",
+                "language": "markdown",
+            }
+        }
+
+        with patch.object(Config, "load_env_from_path"), patch(
+            "notion_sync.Client",
+            return_value=self.mock_notion_client,
+        ), patch.object(
+            self.sync,
+            "load_cache_for_project",
+            return_value=Path(self.test_dir) / ".notion_sync_cache.json",
+        ), patch.object(
+            self.sync,
+            "_retrieve_markdown_page",
+            return_value="# Nested README",
+        ) as retrieve_markdown, patch.object(
+            self.sync,
+            "_extract_code_from_page",
+        ) as extract_code:
+            self.sync.pull_from_notion(
+                self.test_dir,
+                output_dir,
+                force_overwrite=True,
+            )
+
+        retrieve_markdown.assert_called_once_with("markdown_page_123")
+        extract_code.assert_not_called()
+        output_file = output_dir / "docs" / "README.md"
+        self.assertEqual(
+            output_file.read_text(encoding="utf-8"),
+            "# Nested README",
+        )
+
+    def test_pull_keeps_code_extraction_for_source_files(self):
+        output_dir = Path(self.test_dir) / "pulled_code"
+        self.sync.sync_cache = {
+            str(Path("src") / "tool.py"): {
+                "page_id": "code_page_123",
+                "language": "python",
+            }
+        }
+
+        with patch.object(Config, "load_env_from_path"), patch(
+            "notion_sync.Client",
+            return_value=self.mock_notion_client,
+        ), patch.object(
+            self.sync,
+            "load_cache_for_project",
+            return_value=Path(self.test_dir) / ".notion_sync_cache.json",
+        ), patch.object(
+            self.sync,
+            "_retrieve_markdown_page",
+        ) as retrieve_markdown, patch.object(
+            self.sync,
+            "_extract_code_from_page",
+            return_value="print('ok')",
+        ) as extract_code:
+            self.sync.pull_from_notion(
+                self.test_dir,
+                output_dir,
+                force_overwrite=True,
+            )
+
+        retrieve_markdown.assert_not_called()
+        extract_code.assert_called_once_with("code_page_123")
+        output_file = output_dir / "src" / "tool.py"
+        self.assertEqual(
+            output_file.read_text(encoding="utf-8"),
+            "print('ok')",
+        )
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
