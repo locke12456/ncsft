@@ -3,6 +3,7 @@ import tempfile
 import shutil
 import os
 import json
+import hashlib
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock, call
 from notion_sync import NotionSync
@@ -407,12 +408,21 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
             '# Guide\n\n| A | B |\n| --- | --- |\n| 1 | 2 |'
         )
         self.mock_notion_client.pages.create.reset_mock()
+        raw_metadata = {
+            'raw_file_upload_id': 'upload_123',
+            'raw_file_block_id': 'block_123',
+            'source_sha256': 'sha256_123',
+        }
 
         with patch.object(
             self.sync,
             '_create_markdown_page',
             return_value={'id': 'native_markdown_page'}
-        ) as create_markdown_page:
+        ) as create_markdown_page, patch.object(
+            self.sync,
+            '_upload_raw_markdown_source',
+            return_value=raw_metadata
+        ) as upload_raw_source:
             page_id = self.sync.create_or_update_subpage(
                 markdown_file,
                 self.test_dir,
@@ -421,10 +431,17 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
 
         self.assertEqual(page_id, 'native_markdown_page')
         create_markdown_page.assert_called_once()
+        upload_raw_source.assert_called_once_with(
+            'native_markdown_page',
+            markdown_file
+        )
         sent_title, sent_markdown, sent_parent = create_markdown_page.call_args.args
         self.assertEqual(sent_title, 'guide.md')
         self.assertIn('| A | B |', sent_markdown)
         self.assertEqual(sent_parent, self.mock_parent_page_id)
+        cache_entry = self.sync.sync_cache['guide.md']
+        self.assertEqual(cache_entry['raw_file_block_id'], 'block_123')
+        self.assertEqual(cache_entry['source_sha256'], 'sha256_123')
         self.mock_notion_client.pages.create.assert_not_called()
         self.mock_notion_client.blocks.children.list.assert_not_called()
 
@@ -443,7 +460,15 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
             self.sync,
             '_create_markdown_page',
             return_value={'id': 'nested_markdown_page'}
-        ) as create_markdown_page:
+        ) as create_markdown_page, patch.object(
+            self.sync,
+            '_upload_raw_markdown_source',
+            return_value={
+                'raw_file_upload_id': 'upload_123',
+                'raw_file_block_id': 'block_123',
+                'source_sha256': 'sha256_123',
+            }
+        ):
             page_id = self.sync.create_or_update_subpage(
                 markdown_file,
                 self.test_dir,
@@ -544,13 +569,16 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
             with self.assertRaises(RuntimeError):
                 self.sync._retrieve_markdown_page("markdown_page_123")
 
-    def test_pull_routes_markdown_through_markdown_api(self):
+    def test_pull_routes_markdown_through_raw_source(self):
         output_dir = Path(self.test_dir) / "pulled"
+        cache_entry = {
+            "page_id": "markdown_page_123",
+            "language": "markdown",
+            "raw_file_block_id": "block_123",
+            "source_sha256": "sha256_123",
+        }
         self.sync.sync_cache = {
-            str(Path("docs") / "README.md"): {
-                "page_id": "markdown_page_123",
-                "language": "markdown",
-            }
+            str(Path("docs") / "README.md"): cache_entry
         }
 
         with patch.object(Config, "load_env_from_path"), patch(
@@ -562,9 +590,9 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
             return_value=Path(self.test_dir) / ".notion_sync_cache.json",
         ), patch.object(
             self.sync,
-            "_retrieve_markdown_page",
-            return_value="# Nested README",
-        ) as retrieve_markdown, patch.object(
+            "_download_raw_markdown_source",
+            return_value=b"# Nested README\r\n",
+        ) as download_raw, patch.object(
             self.sync,
             "_extract_code_from_page",
         ) as extract_code:
@@ -574,13 +602,10 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
                 force_overwrite=True,
             )
 
-        retrieve_markdown.assert_called_once_with("markdown_page_123")
+        download_raw.assert_called_once_with(cache_entry)
         extract_code.assert_not_called()
         output_file = output_dir / "docs" / "README.md"
-        self.assertEqual(
-            output_file.read_text(encoding="utf-8"),
-            "# Nested README",
-        )
+        self.assertEqual(output_file.read_bytes(), b"# Nested README\r\n")
 
     def test_pull_keeps_code_extraction_for_source_files(self):
         output_dir = Path(self.test_dir) / "pulled_code"
@@ -600,8 +625,8 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
             return_value=Path(self.test_dir) / ".notion_sync_cache.json",
         ), patch.object(
             self.sync,
-            "_retrieve_markdown_page",
-        ) as retrieve_markdown, patch.object(
+            "_download_raw_markdown_source",
+        ) as download_raw, patch.object(
             self.sync,
             "_extract_code_from_page",
             return_value="print('ok')",
@@ -612,7 +637,7 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
                 force_overwrite=True,
             )
 
-        retrieve_markdown.assert_not_called()
+        download_raw.assert_not_called()
         extract_code.assert_called_once_with("code_page_123")
         output_file = output_dir / "src" / "tool.py"
         self.assertEqual(
@@ -620,6 +645,91 @@ class TestDirectMarkdownPageApi(TestNotionSyncFixed):
             "print('ok')",
         )
 
+
+    def test_upload_raw_markdown_source_returns_hash_and_block(self):
+        markdown_file = self.create_test_file(
+            "README.md",
+            "# Exact\r\n\r\n| A | B |\r\n| --- | --- |\r\n"
+        )
+        raw_content = markdown_file.read_bytes()
+        expected_sha256 = hashlib.sha256(raw_content).hexdigest()
+
+        with patch.object(
+            self.sync,
+            "_notion_api_json",
+            side_effect=[
+                {"id": "upload_123", "status": "pending"},
+                {"results": [{"id": "block_123"}]},
+            ],
+        ) as api_json, patch.object(
+            self.sync,
+            "_send_file_upload",
+            return_value={"id": "upload_123", "status": "uploaded"},
+        ) as send_upload:
+            metadata = self.sync._upload_raw_markdown_source(
+                "page_123",
+                markdown_file,
+            )
+
+        send_upload.assert_called_once_with("upload_123", raw_content)
+        self.assertEqual(metadata["raw_file_block_id"], "block_123")
+        self.assertEqual(metadata["source_sha256"], expected_sha256)
+        self.assertEqual(api_json.call_count, 2)
+
+    def test_download_raw_markdown_source_is_byte_exact(self):
+        raw_content = b"# Exact\r\n\r\n| A | B |\r\n"
+        expected_sha256 = hashlib.sha256(raw_content).hexdigest()
+        response_context = MagicMock()
+        response_context.__enter__.return_value.read.return_value = raw_content
+
+        with patch.object(
+            self.sync,
+            "_notion_api_json",
+            return_value={
+                "type": "file",
+                "file": {
+                    "type": "file",
+                    "file": {"url": "https://download.invalid/source.md"},
+                },
+            },
+        ), patch(
+            "notion_sync.urllib.request.urlopen",
+            return_value=response_context,
+        ):
+            result = self.sync._download_raw_markdown_source({
+                "raw_file_block_id": "block_123",
+                "source_sha256": expected_sha256,
+            })
+
+        self.assertEqual(result, raw_content)
+
+    def test_download_raw_markdown_source_rejects_hash_mismatch(self):
+        response_context = MagicMock()
+        response_context.__enter__.return_value.read.return_value = b"changed"
+
+        with patch.object(
+            self.sync,
+            "_notion_api_json",
+            return_value={
+                "type": "file",
+                "file": {
+                    "type": "file",
+                    "file": {"url": "https://download.invalid/source.md"},
+                },
+            },
+        ), patch(
+            "notion_sync.urllib.request.urlopen",
+            return_value=response_context,
+        ):
+            with self.assertRaises(RuntimeError):
+                self.sync._download_raw_markdown_source({
+                    "raw_file_block_id": "block_123",
+                    "source_sha256": hashlib.sha256(b"original").hexdigest(),
+                })
+
+    def test_download_raw_markdown_source_requires_metadata(self):
+        with self.assertRaises(RuntimeError):
+            self.sync._download_raw_markdown_source({})
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

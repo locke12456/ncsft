@@ -162,6 +162,7 @@ class NotionSync:
         if use_plain_text and not is_markdown:
             language = 'plain text'
         
+        raw_source_metadata = {}
         try:
             target_parent_page_id = self.parent_page_id
             if is_markdown:
@@ -182,7 +183,7 @@ class NotionSync:
             
             if not old_page_id or update_mode == 'recreate' or is_markdown:
                 # Markdown is created with content in one request, so it uses recreate mode.
-                if old_page_id:
+                if old_page_id and not is_markdown:
                     try:
                         self.notion.pages.update(
                             page_id=old_page_id,
@@ -214,8 +215,36 @@ class NotionSync:
                     )
                 
                 page_id = new_page["id"]
-                if not is_markdown:
-                    self._update_subpage_content(page_id, content, file_path, language, use_plain_text)
+                if is_markdown:
+                    try:
+                        raw_source_metadata = self._upload_raw_markdown_source(
+                            page_id,
+                            file_path
+                        )
+                    except Exception:
+                        try:
+                            self.notion.pages.update(page_id=page_id, archived=True)
+                        except Exception:
+                            pass
+                        raise
+
+                    if old_page_id:
+                        try:
+                            self.notion.pages.update(
+                                page_id=old_page_id,
+                                archived=True
+                            )
+                            print(f"🗑️ Deleted old page for {relative_path}")
+                        except Exception as e:
+                            print(f"⚠️ Could not delete old page: {str(e)}")
+                else:
+                    self._update_subpage_content(
+                        page_id,
+                        content,
+                        file_path,
+                        language,
+                        use_plain_text
+                    )
             print(f"✅ Created {relative_path}")
             
             # Update cache
@@ -226,6 +255,7 @@ class NotionSync:
                 'file_size': file_size,
                 'language': language
             }
+            self.sync_cache[relative_path].update(raw_source_metadata)
             
             return page_id
             
@@ -338,6 +368,144 @@ class NotionSync:
             raise RuntimeError(
                 f"Notion Markdown API failed ({error.code}): {response_body}"
             ) from error
+
+    def _notion_api_json(self, method, path, payload=None):
+        """Call a JSON Notion API endpoint using the 2026 API version."""
+        api_base = "https:" + "//api.notion.com/v1"
+        request_data = None
+        headers = {
+            "Authorization": f"Bearer {self.notion_token}",
+            "Notion-Version": "2026-03-11",
+        }
+        if payload is not None:
+            request_data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+
+        request = urllib.request.Request(
+            api_base + path,
+            data=request_data,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            response_body = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Notion API failed ({error.code}): {response_body}"
+            ) from error
+
+    def _send_file_upload(self, file_upload_id, raw_content):
+        """Send raw bytes to a pending single-part Notion file upload."""
+        boundary = f"----NotionSync{os.urandom(12).hex()}"
+        body = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="source.md"\r\n'
+            "Content-Type: text/markdown\r\n\r\n"
+        ).encode("ascii")
+        body += raw_content
+        body += f"\r\n--{boundary}--\r\n".encode("ascii")
+
+        api_base = "https:" + "//api.notion.com/v1/file_uploads"
+        request = urllib.request.Request(
+            f"{api_base}/{file_upload_id}/send",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self.notion_token}",
+                "Notion-Version": "2026-03-11",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            response_body = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Notion file upload failed ({error.code}): {response_body}"
+            ) from error
+
+    def _upload_raw_markdown_source(self, page_id, file_path):
+        """Upload and attach the byte-exact Markdown source to its page."""
+        source_path = Path(file_path)
+        raw_content = source_path.read_bytes()
+        source_sha256 = hashlib.sha256(raw_content).hexdigest()
+
+        upload = self._notion_api_json(
+            "POST",
+            "/file_uploads",
+            {
+                "mode": "single_part",
+                "filename": source_path.name,
+                "content_type": "text/markdown",
+            },
+        )
+        file_upload_id = upload.get("id")
+        if not file_upload_id:
+            raise RuntimeError("Notion did not return a file upload ID")
+
+        sent_upload = self._send_file_upload(file_upload_id, raw_content)
+        if sent_upload.get("status") != "uploaded":
+            raise RuntimeError(
+                f"Notion raw source upload did not complete: {sent_upload}"
+            )
+
+        attached = self._notion_api_json(
+            "PATCH",
+            f"/blocks/{page_id}/children",
+            {
+                "children": [{
+                    "type": "file",
+                    "file": {
+                        "type": "file_upload",
+                        "file_upload": {"id": file_upload_id},
+                        "caption": [],
+                    },
+                }],
+            },
+        )
+        results = attached.get("results", [])
+        if not results or not results[0].get("id"):
+            raise RuntimeError("Notion did not return the raw source file block")
+
+        return {
+            "raw_file_upload_id": file_upload_id,
+            "raw_file_block_id": results[0]["id"],
+            "source_sha256": source_sha256,
+        }
+
+    def _download_raw_markdown_source(self, cache_data):
+        """Download and verify the byte-exact Markdown source attachment."""
+        file_block_id = cache_data.get("raw_file_block_id")
+        expected_sha256 = cache_data.get("source_sha256")
+        if not file_block_id or not expected_sha256:
+            raise RuntimeError(
+                "Raw Markdown source metadata is missing; run push -f first"
+            )
+
+        block = self._notion_api_json("GET", f"/blocks/{file_block_id}")
+        file_payload = block.get("file", {})
+        hosted_file = file_payload.get("file", {})
+        download_url = hosted_file.get("url") or file_payload.get("url")
+        if not download_url:
+            raise RuntimeError("Raw Markdown source block has no download URL")
+
+        try:
+            with urllib.request.urlopen(download_url) as response:
+                raw_content = response.read()
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(
+                f"Raw Markdown download failed ({error.code})"
+            ) from error
+
+        actual_sha256 = hashlib.sha256(raw_content).hexdigest()
+        if actual_sha256 != expected_sha256:
+            raise RuntimeError(
+                "Raw Markdown SHA-256 mismatch; refusing to write corrupted content"
+            )
+        return raw_content
 
     def _update_subpage_content(self, page_id, content, file_path, language, use_plain_text=False):
         """
@@ -664,24 +832,23 @@ class NotionSync:
                         print(f"⏭️  Skipping {relative_path} (file exists, use -f to overwrite)")
                         continue
                     
-                    # Get page content
+                    # Restore Markdown from its byte-exact source attachment.
                     is_markdown = (
                         Path(relative_path).suffix.lower() in ('.md', '.markdown')
                         or cache_data.get('language') == 'markdown'
                     )
+                    output_file.parent.mkdir(parents=True, exist_ok=True)
+
                     if is_markdown:
-                        content = self._retrieve_markdown_page(page_id)
+                        raw_content = self._download_raw_markdown_source(cache_data)
+                        output_file.write_bytes(raw_content)
                     else:
                         content = self._extract_code_from_page(page_id)
-                    if content is None:
-                        print(f"❌ Failed to extract content from {relative_path}")
-                        continue
-                    
-                    output_file.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    # Write content to file
-                    with open(output_file, 'w', encoding='utf-8') as f:
-                        f.write(content)
+                        if content is None:
+                            print(f"❌ Failed to extract content from {relative_path}")
+                            continue
+                        with open(output_file, 'w', encoding='utf-8') as f:
+                            f.write(content)
                     
                     print(f"✅ Pulled {relative_path}")
                     success_count += 1
